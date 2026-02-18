@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-TRANSFER_ROOT = Path.home() / "Desktop" / "PC-Transfer"
+TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
+BRIDGE_STAGING = Path.home() / "BridgeStaging"
 _VALID_FOLDERS = {"inbox", "outbox", "staging", "archive"}
 
 
@@ -162,6 +163,74 @@ class RPCHandler:
                 sha.update(chunk)
         match = (sha.hexdigest() == expected)
         return {"ok": True, "match": match, "sha256": sha.hexdigest()}
+
+    def handle_place_staged(self, msg: dict) -> dict:
+        """
+        Move a file from the session staging area to its final destination.
+        Called after the PC has uploaded the file and verified integrity.
+
+        msg keys:
+            session_id  – 12-hex session identifier
+            filename    – bare filename (no directory component)
+            destination – destination path, may start with ~ (e.g. ~/Desktop/file.py)
+        """
+        session_id  = msg.get("session_id", "")
+        filename    = msg.get("filename", "")
+        destination = msg.get("destination", "")
+
+        if not session_id or not filename or not destination:
+            return {"ok": False, "error": "Missing session_id, filename, or destination"}
+
+        # Sanitise: bare filename only (no path traversal)
+        safe_name = Path(filename).name
+        if not safe_name:
+            return {"ok": False, "error": "Invalid filename"}
+
+        src = BRIDGE_STAGING / session_id / safe_name
+        if not src.exists():
+            return {"ok": False, "error": f"Staged file not found: {src}"}
+
+        # Expand ~ to home directory
+        dst = Path(destination.replace("~", str(Path.home())))
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            log.info("place_staged: %s → %s", src, dst)
+            return {"ok": True, "destination": str(dst)}
+        except Exception as exc:
+            log.exception("place_staged failed")
+            return {"ok": False, "error": str(exc)}
+
+    def handle_get_staging_sha256(self, msg: dict) -> dict:
+        """
+        Return the SHA-256 of a file sitting in BridgeStaging.
+        The PC calls this immediately after send_file to verify integrity
+        without a round-trip to the final destination.
+        """
+        session_id = msg.get("session_id", "")
+        filename   = msg.get("filename", "")
+        if not session_id or not filename:
+            return {"ok": False, "error": "Missing params"}
+
+        target = BRIDGE_STAGING / session_id / Path(filename).name
+        if not target.exists():
+            return {"ok": False, "error": "File not found in staging"}
+
+        sha = hashlib.sha256()
+        with open(target, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                sha.update(chunk)
+        return {"ok": True, "sha256": sha.hexdigest()}
+
+    def handle_cleanup_staging(self, msg: dict) -> dict:
+        """Remove the staging directory for a completed session."""
+        session_id = msg.get("session_id", "")
+        if not session_id:
+            return {"ok": False, "error": "Missing session_id"}
+        stage_dir = BRIDGE_STAGING / session_id
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        return {"ok": True}
 
     # ------------------------------------------------------------------
     # Input (dispatched from input channel, but RPC versions useful too)

@@ -1,449 +1,418 @@
 """
 pc-application/src/transfer/transfer_panel.py
-File transfer sidebar UI — drag-drop zone, queue, remote browser.
+
+Transfer Queue Panel — the only transfer UI.
+
+No settings dialogs.  Drag-and-drop onto the DGX canvas view triggers
+the automatic pipeline:
+  drop → capture selection + destination → stage → send → verify → place → log
+
+Layout
+  ┌─────────────────────────────────┐
+  │  File Transfer              [✕] │  ← header
+  ├─────────────────────────────────┤
+  │  [job row]  filename  ████░░ 60%│
+  │    ↳ file1.py  ✅               │
+  │    ↳ folder/   ⏳ sending…      │
+  ├─────────────────────────────────┤
+  │  [Open Staging] [Open Log] [✕]  │  ← footer actions
+  └─────────────────────────────────┘
 """
 
+import logging
+import subprocess
 from pathlib import Path
+from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QTabWidget, QFrame, QComboBox,
-    QProgressBar, QScrollArea, QSizePolicy, QMessageBox, QFileDialog
+    QScrollArea, QFrame, QProgressBar, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
-from PyQt6.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor
 
 from theme import (
     ACCENT, SUCCESS, ERROR, WARNING, TEXT_DIM, TEXT_MAIN,
     BG_RAISED, BG_SURFACE, BG_BASE, BORDER, BG_DEEP
 )
-from widgets import SectionTitle, HDivider
-from .transfer_worker import TransferWorker, TransferItem
+from .transfer_session import TransferSession, TransferJob, TransferItem
+from .transfer_worker  import TransferWorker
+
+log = logging.getLogger("pc.transfer.panel")
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Drop zone widget
+# Single file row inside a job
 # ──────────────────────────────────────────────────────────────────────
 
-class FileDropZone(QFrame):
-    files_dropped = pyqtSignal(list)
+class _FileRow(QWidget):
+    retry_requested = pyqtSignal(str)  # item_id
 
-    def __init__(self, parent=None):
+    _STATUS_STYLE = {
+        "queued":     f"color: {TEXT_DIM};",
+        "running":    f"color: {ACCENT};",
+        "verifying":  f"color: {WARNING};",
+        "done":       f"color: {SUCCESS};",
+        "failed":     f"color: {ERROR};",
+    }
+    _STATUS_ICON = {
+        "queued":    "⏳",
+        "running":   "⬆",
+        "verifying": "🔍",
+        "done":      "✅",
+        "failed":    "❌",
+    }
+
+    def __init__(self, item: TransferItem, parent=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setFixedHeight(70)
-        self.setStyleSheet(
-            f"QFrame {{ border: 2px dashed {ACCENT}44;"
-            f"border-radius: 8px; background: {BG_SURFACE}; }}"
-            f"QFrame:hover {{ border-color: {ACCENT}; background: {ACCENT}11; }}"
-        )
-        l = QVBoxLayout(self)
-        l.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon = QLabel("📂")
-        icon.setStyleSheet("font-size: 18px; border: none;")
-        lbl  = QLabel("Drop files here or click to browse")
-        lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; border: none;")
-        l.addWidget(icon, alignment=Qt.AlignmentFlag.AlignCenter)
-        l.addWidget(lbl,  alignment=Qt.AlignmentFlag.AlignCenter)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._item = item
+        self.setFixedHeight(26)
 
-    def mousePressEvent(self, ev):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select Files")
-        if paths:
-            self.files_dropped.emit(paths)
-
-    def dragEnterEvent(self, ev: QDragEnterEvent):
-        if ev.mimeData().hasUrls():
-            ev.acceptProposedAction()
-            self.setStyleSheet(
-                f"QFrame {{ border: 2px dashed {ACCENT}; border-radius: 8px;"
-                f"background: {ACCENT}22; }}"
-            )
-
-    def dragLeaveEvent(self, ev):
-        self.setStyleSheet(
-            f"QFrame {{ border: 2px dashed {ACCENT}44; border-radius: 8px;"
-            f"background: {BG_SURFACE}; }}"
-            f"QFrame:hover {{ border-color: {ACCENT}; background: {ACCENT}11; }}"
-        )
-
-    def dropEvent(self, ev: QDropEvent):
-        self.dragLeaveEvent(ev)
-        paths = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
-        if paths:
-            self.files_dropped.emit(paths)
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Remote file row
-# ──────────────────────────────────────────────────────────────────────
-
-class _RemoteFileItem(QWidget):
-    def __init__(self, name: str, size_str: str, parent=None):
-        super().__init__(parent)
         l = QHBoxLayout(self)
-        l.setContentsMargins(4, 2, 4, 2)
-        ico = QLabel("📄")
-        ico.setFixedWidth(20)
-        nm  = QLabel(name)
-        nm.setStyleSheet(f"color: {TEXT_MAIN}; font-size: 12px;")
-        sz  = QLabel(size_str)
-        sz.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
-        sz.setFixedWidth(70)
-        sz.setAlignment(Qt.AlignmentFlag.AlignRight)
-        l.addWidget(ico)
-        l.addWidget(nm)
-        l.addStretch()
-        l.addWidget(sz)
+        l.setContentsMargins(20, 0, 8, 0)
+        l.setSpacing(6)
+
+        self._icon = QLabel("⏳")
+        self._icon.setFixedWidth(16)
+        self._icon.setStyleSheet("font-size: 11px;")
+        l.addWidget(self._icon)
+
+        self._name = QLabel(item.local_path.name)
+        self._name.setStyleSheet(f"color: {TEXT_MAIN}; font-size: 11px;")
+        self._name.setMaximumWidth(140)
+        l.addWidget(self._name)
+
+        self._bar = QProgressBar()
+        self._bar.setFixedHeight(4)
+        self._bar.setTextVisible(False)
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setStyleSheet(
+            f"QProgressBar {{ background: {BG_BASE}; border-radius: 2px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 2px; }}"
+        )
+        l.addWidget(self._bar)
+
+        self._msg = QLabel("")
+        self._msg.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
+        self._msg.setFixedWidth(80)
+        l.addWidget(self._msg)
+
+        self._btn_retry = QPushButton("↺")
+        self._btn_retry.setFixedSize(20, 20)
+        self._btn_retry.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {ACCENT};"
+            f"font-size: 12px; border: none; }}"
+        )
+        self._btn_retry.hide()
+        self._btn_retry.clicked.connect(
+            lambda: self.retry_requested.emit(item.item_id)
+        )
+        l.addWidget(self._btn_retry)
+
+    def update_progress(self, done: int, total: int):
+        if total > 0:
+            self._bar.setValue(int(done / total * 100))
+
+    def update_status(self, status: str, msg: str = ""):
+        self._icon.setText(self._STATUS_ICON.get(status, "⏳"))
+        self._icon.setStyleSheet(
+            "font-size: 11px; " + self._STATUS_STYLE.get(status, "")
+        )
+        if status == "running":
+            pct = self._bar.value()
+            self._msg.setText(f"{pct}%")
+        elif status in ("done", "failed"):
+            self._bar.setValue(100 if status == "done" else self._bar.value())
+            self._msg.setText("✓" if status == "done" else msg[:20] if msg else "error")
+            if status == "failed":
+                self._btn_retry.show()
+                self._msg.setStyleSheet(f"color: {ERROR}; font-size: 10px;")
+                self._msg.setToolTip(msg)
+        elif status == "verifying":
+            self._msg.setText("checking…")
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Remote file fetch thread
+# Job row (one per drop)
 # ──────────────────────────────────────────────────────────────────────
 
-class _ListFilesThread(QThread):
-    from PyQt6.QtCore import pyqtSignal as _sig
-    result = _sig(dict)
+class _JobRow(QWidget):
+    def __init__(self, job: TransferJob, parent=None):
+        super().__init__(parent)
+        self._job = job
+        self._file_rows: dict[str, _FileRow] = {}
 
-    def __init__(self, conn, folder: str):
-        super().__init__()
-        self._conn   = conn
-        self._folder = folder
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 4, 0, 4)
+        root.setSpacing(2)
 
-    def run(self):
-        try:
-            r = self._conn.rpc({"type": "list_files", "folder": self._folder}, timeout=6)
-            self.result.emit(r)
-        except Exception as e:
-            self.result.emit({"ok": False, "error": str(e)})
+        # ── Header row ────────────────────────────────────────────────
+        hdr = QWidget()
+        hdr.setFixedHeight(30)
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(8, 0, 8, 0)
+        hl.setSpacing(6)
+
+        icon = QLabel("📦")
+        icon.setFixedWidth(18)
+        hl.addWidget(icon)
+
+        count = len(job.items)
+        noun  = "file" if count == 1 else "files"
+        dest  = job.dgx_dest_dir.replace("~", "").rstrip("/").split("/")[-1] or "Desktop"
+        lbl   = QLabel(f"{count} {noun} → {dest}")
+        lbl.setStyleSheet(f"color: {TEXT_MAIN}; font-size: 12px; font-weight: 600;")
+        hl.addWidget(lbl)
+        hl.addStretch()
+
+        self._job_bar = QProgressBar()
+        self._job_bar.setFixedSize(80, 6)
+        self._job_bar.setTextVisible(False)
+        self._job_bar.setRange(0, count)
+        self._job_bar.setValue(0)
+        self._job_bar.setStyleSheet(
+            f"QProgressBar {{ background: {BG_BASE}; border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
+        )
+        hl.addWidget(self._job_bar)
+
+        self._job_lbl = QLabel("queued")
+        self._job_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
+        self._job_lbl.setFixedWidth(60)
+        hl.addWidget(self._job_lbl)
+
+        root.addWidget(hdr)
+
+        # ── File sub-rows ─────────────────────────────────────────────
+        for item in job.items:
+            row = _FileRow(item)
+            root.addWidget(row)
+            self._file_rows[item.item_id] = row
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {BORDER};")
+        root.addWidget(sep)
+
+    # ── Slot helpers (called from panel) ──────────────────────────────
+
+    def on_item_progress(self, item_id: str, done: int, total: int):
+        row = self._file_rows.get(item_id)
+        if row:
+            row.update_progress(done, total)
+
+    def on_item_status(self, item_id: str, status: str, msg: str):
+        row = self._file_rows.get(item_id)
+        if row:
+            row.update_status(status, msg)
+        self._recalc_job_state()
+
+    def on_job_progress(self, done: int, total: int):
+        self._job_bar.setValue(done)
+        if done < total:
+            self._job_lbl.setText(f"{done}/{total}")
+        else:
+            self._job_lbl.setText("done")
+
+    def _recalc_job_state(self):
+        items    = self._job.items
+        statuses = [i.status for i in items]
+        if all(s == "done" for s in statuses):
+            self._job_lbl.setText("✅ done")
+            self._job_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
+            self._job_bar.setValue(len(items))
+        elif any(s == "failed" for s in statuses):
+            fc = sum(1 for s in statuses if s == "failed")
+            self._job_lbl.setText(f"⚠ {fc} failed")
+            self._job_lbl.setStyleSheet(f"color: {ERROR}; font-size: 10px;")
+        elif any(s == "running" for s in statuses):
+            rc = sum(1 for s in statuses if s == "running")
+            self._job_lbl.setText(f"sending {rc}")
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Transfer panel
+# Transfer Queue Panel (the public widget)
 # ──────────────────────────────────────────────────────────────────────
 
 class TransferPanel(QWidget):
-    """Sidebar panel for file transfer operations."""
+    """
+    Sidebar panel.  Wire up:
+      panel.set_connection(conn)
+      panel.enqueue_drop(paths, dgx_dest_dir)   ← called from MainWindow on drop
+    """
 
     def __init__(self, connection=None, parent=None):
         super().__init__(parent)
-        self._conn   = connection
-        self._worker: TransferWorker | None = None
-        self._queue: list[TransferItem] = []
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(340)
+        self._conn:    Optional[object] = connection
+        self._session: TransferSession  = TransferSession()
+        self._workers: list[TransferWorker] = []
+        self._job_rows: dict[str, _JobRow]  = {}
+
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(360)
         self._build_ui()
 
     def set_connection(self, conn):
         self._conn = conn
-        self._btn_refresh.setEnabled(conn is not None)
-        self._btn_send.setEnabled(conn is not None)
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
+    # ── UI ────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        l = QVBoxLayout(self)
-        l.setContentsMargins(0, 0, 0, 0)
-        l.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         # Header
         hdr = QWidget()
-        hdr.setFixedHeight(44)
-        hdr.setStyleSheet(f"background: {BG_RAISED}; border-bottom: 1px solid {BORDER};")
+        hdr.setFixedHeight(36)
+        hdr.setStyleSheet(
+            f"background: {BG_RAISED}; border-bottom: 1px solid {BORDER};"
+        )
         hl = QHBoxLayout(hdr)
         hl.setContentsMargins(12, 0, 8, 0)
-        hl.addWidget(QLabel("File Transfer", styleSheet=f"font-weight: 700; color: {TEXT_MAIN};"))
+        hl.setSpacing(0)
+        title = QLabel("Transfers")
+        title.setStyleSheet(
+            f"color: {TEXT_MAIN}; font-weight: 700; font-size: 13px;"
+        )
+        hl.addWidget(title)
         hl.addStretch()
         btn_close = QPushButton("✕")
         btn_close.setFlat(True)
-        btn_close.setStyleSheet(f"color: {TEXT_DIM}; font-size: 14px;")
-        btn_close.clicked.connect(lambda: self.hide())
         btn_close.setFixedSize(28, 28)
+        btn_close.setStyleSheet(f"color: {TEXT_DIM}; font-size: 14px;")
+        btn_close.clicked.connect(self.hide)
         hl.addWidget(btn_close)
-        l.addWidget(hdr)
+        root.addWidget(hdr)
 
-        # Tabs
-        self._tabs = QTabWidget()
-        self._tabs.addTab(self._upload_tab(),  "⬆  Upload")
-        self._tabs.addTab(self._dgx_tab(),     "🗂  DGX Files")
-        l.addWidget(self._tabs)
-
-        # Overall progress bar
-        self._ovr_bar = QProgressBar()
-        self._ovr_bar.setFixedHeight(4)
-        self._ovr_bar.setTextVisible(False)
-        self._ovr_bar.setRange(0, 100)
-        self._ovr_bar.setValue(0)
-        self._ovr_bar.hide()
-        l.addWidget(self._ovr_bar)
-
-        # Status label
-        self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet(
-            f"color: {TEXT_DIM}; font-size: 10px; padding: 2px 8px;"
+        # Scroll area for job rows
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        l.addWidget(self._status_lbl)
-
-    def _upload_tab(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setContentsMargins(10, 10, 10, 10)
-        l.setSpacing(10)
-
-        # Drop zone
-        self._drop_zone = FileDropZone()
-        self._drop_zone.files_dropped.connect(self.enqueue_paths)
-        l.addWidget(self._drop_zone)
-
-        # Destination row
-        dest_row = QHBoxLayout()
-        dest_row.addWidget(QLabel("Destination:", styleSheet=f"color: {TEXT_DIM}; font-size: 11px;"))
-        self._dest_combo = QComboBox()
-        self._dest_combo.addItems(["inbox", "staging", "outbox"])
-        dest_row.addWidget(self._dest_combo)
-        l.addLayout(dest_row)
-
-        # Queue list
-        l.addWidget(SectionTitle("Queue"))
-        self._queue_list = QListWidget()
-        self._queue_list.setStyleSheet(
-            f"QListWidget {{ background: {BG_DEEP}; border: 1px solid {BORDER}; border-radius: 6px; }}"
-            f"QListWidget::item {{ padding: 4px 8px; color: {TEXT_MAIN}; font-size: 11px; }}"
-            f"QListWidget::item:selected {{ background: {ACCENT}33; }}"
+        scroll.setStyleSheet(
+            f"QScrollArea {{ border: none; background: {BG_DEEP}; }}"
         )
-        l.addWidget(self._queue_list)
+        self._jobs_widget = QWidget()
+        self._jobs_widget.setStyleSheet(f"background: {BG_DEEP};")
+        self._jobs_layout = QVBoxLayout(self._jobs_widget)
+        self._jobs_layout.setContentsMargins(0, 0, 0, 0)
+        self._jobs_layout.setSpacing(0)
+        self._jobs_layout.addStretch()
 
-        # Buttons
-        btn_row = QHBoxLayout()
-        self._btn_clear = QPushButton("Clear")
-        self._btn_clear.setFixedHeight(28)
-        self._btn_clear.clicked.connect(self._clear_queue)
-        self._btn_send = QPushButton("Send All")
-        self._btn_send.setProperty("class", "primary")
-        self._btn_send.setFixedHeight(28)
-        self._btn_send.clicked.connect(self._send_all)
-        self._btn_send.setEnabled(False)
-        btn_row.addWidget(self._btn_clear)
-        btn_row.addWidget(self._btn_send)
-        l.addLayout(btn_row)
-
-        return w
-
-    def _dgx_tab(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setContentsMargins(10, 10, 10, 10)
-        l.setSpacing(8)
-
-        # Folder selector + refresh
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Folder:", styleSheet=f"color: {TEXT_DIM}; font-size: 11px;"))
-        self._folder_combo = QComboBox()
-        self._folder_combo.addItems(["inbox", "outbox", "staging", "archive"])
-        self._folder_combo.currentTextChanged.connect(self._refresh_remote)
-        top.addWidget(self._folder_combo)
-        self._btn_refresh = QPushButton("↺")
-        self._btn_refresh.setFixedSize(28, 28)
-        self._btn_refresh.clicked.connect(self._refresh_remote)
-        self._btn_refresh.setEnabled(False)
-        top.addWidget(self._btn_refresh)
-        l.addLayout(top)
-
-        # Remote file list
-        self._remote_list = QListWidget()
-        self._remote_list.setStyleSheet(
-            f"QListWidget {{ background: {BG_DEEP}; border: 1px solid {BORDER}; border-radius: 6px; }}"
-            f"QListWidget::item {{ padding: 4px 8px; color: {TEXT_MAIN}; font-size: 11px; }}"
-            f"QListWidget::item:selected {{ background: {ACCENT}33; }}"
+        # Empty state label
+        self._empty_lbl = QLabel(
+            "Drop files onto the DGX view\nto transfer them here."
         )
-        self._remote_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._remote_list.customContextMenuRequested.connect(self._remote_context_menu)
-        l.addWidget(self._remote_list)
+        self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 12px; padding: 24px;"
+        )
+        self._jobs_layout.insertWidget(0, self._empty_lbl)
 
-        # Action buttons
-        btn_row = QHBoxLayout()
-        btn_dl  = QPushButton("⬇ Download")
-        btn_dl.setFixedHeight(28)
-        btn_dl.clicked.connect(self._download_selected)
-        btn_del = QPushButton("🗑 Delete")
-        btn_del.setFixedHeight(28)
-        btn_del.setProperty("class", "danger")
-        btn_del.clicked.connect(self._delete_selected)
-        btn_row.addWidget(btn_dl)
-        btn_row.addWidget(btn_del)
-        l.addLayout(btn_row)
+        scroll.setWidget(self._jobs_widget)
+        root.addWidget(scroll, 1)
 
-        return w
+        # Footer
+        ftr = QWidget()
+        ftr.setFixedHeight(36)
+        ftr.setStyleSheet(
+            f"background: {BG_RAISED}; border-top: 1px solid {BORDER};"
+        )
+        fl = QHBoxLayout(ftr)
+        fl.setContentsMargins(8, 0, 8, 0)
+        fl.setSpacing(4)
 
-    # ------------------------------------------------------------------
-    # Upload logic
-    # ------------------------------------------------------------------
+        def _ftr_btn(text: str, tip: str = "") -> QPushButton:
+            b = QPushButton(text)
+            b.setFixedHeight(24)
+            b.setStyleSheet(
+                f"QPushButton {{ background: {BG_SURFACE}; color: {TEXT_DIM};"
+                f"border: 1px solid {BORDER}; border-radius: 4px;"
+                f"font-size: 10px; padding: 0 6px; }}"
+                f"QPushButton:hover {{ color: {TEXT_MAIN}; border-color: {ACCENT}66; }}"
+            )
+            if tip:
+                b.setToolTip(tip)
+            return b
 
-    def enqueue_paths(self, paths: list[str]):
-        """Called from MainWindow when files are dropped or selected."""
-        folder = self._dest_combo.currentText()
-        new_items = []
-        for p in paths:
-            path = Path(p)
-            if not path.is_file():
-                continue
-            item = TransferItem(local_path=path, remote_folder=folder)
-            self._queue.append(item)
-            lw_item = QListWidgetItem(f"📄  {path.name}")
-            lw_item.setData(Qt.ItemDataRole.UserRole, str(path))
-            self._queue_list.addItem(lw_item)
-            new_items.append(item)
-        if new_items and self._conn:
-            self._btn_send.setEnabled(True)
+        btn_stage = _ftr_btn("📁 Staging", "Open PC staging folder")
+        btn_stage.clicked.connect(self._session.open_stage_dir)
+        fl.addWidget(btn_stage)
 
-    def _clear_queue(self):
-        self._queue.clear()
-        self._queue_list.clear()
-        self._btn_send.setEnabled(False)
+        btn_log = _ftr_btn("🗒 Log", "Open session transfer log")
+        btn_log.clicked.connect(self._session.open_log)
+        fl.addWidget(btn_log)
 
-    def _send_all(self):
-        if not self._queue or not self._conn:
-            return
-        if self._worker and self._worker.isRunning():
-            return
+        fl.addStretch()
 
-        self._btn_send.setEnabled(False)
-        self._ovr_bar.show()
-        self._ovr_bar.setValue(0)
+        btn_clear = _ftr_btn("Clear done")
+        btn_clear.clicked.connect(self._clear_done)
+        fl.addWidget(btn_clear)
 
-        self._worker = TransferWorker(list(self._queue), self._conn)
-        self._worker.progress.connect(self._on_item_progress)
-        self._worker.item_complete.connect(self._on_item_complete)
-        self._worker.overall_progress.connect(self._on_overall_progress)
-        self._worker.batch_complete.connect(self._on_batch_complete)
-        self._worker.status_msg.connect(self._status_lbl.setText)
-        self._worker.start()
+        root.addWidget(ftr)
 
-    def _on_item_progress(self, item_id: str, done: int, total: int):
-        if total > 0:
-            pct = int(done / total * 100)
-            # update the queue list item label
-            for i in range(self._queue_list.count()):
-                w = self._queue_list.item(i)
-                if w and w.data(Qt.ItemDataRole.UserRole) == item_id:
-                    name = Path(item_id).name
-                    w.setText(f"📤  {name}  {pct}%")
-                    break
+    # ── Public API ────────────────────────────────────────────────────
 
-    def _on_item_complete(self, item_id: str, ok: bool, msg: str):
-        for i in range(self._queue_list.count()):
-            w = self._queue_list.item(i)
-            if w and w.data(Qt.ItemDataRole.UserRole) == item_id:
-                name = Path(item_id).name
-                if ok:
-                    w.setText(f"✅  {name}")
-                    w.setForeground(__import__('PyQt6.QtGui', fromlist=['QColor']).QColor(SUCCESS))
-                else:
-                    w.setText(f"❌  {name}  — {msg}")
-                    w.setForeground(__import__('PyQt6.QtGui', fromlist=['QColor']).QColor(ERROR))
-                break
-
-    def _on_overall_progress(self, done: int, total: int):
-        if total > 0:
-            self._ovr_bar.setValue(int(done / total * 100))
-
-    def _on_batch_complete(self):
-        self._ovr_bar.setValue(100)
-        self._status_lbl.setText("All transfers complete  ✓")
-        QTimer.singleShot(4000, lambda: self._status_lbl.setText(""))
-        QTimer.singleShot(4000, self._ovr_bar.hide)
-        self._queue.clear()
-
-    # ------------------------------------------------------------------
-    # Remote browser
-    # ------------------------------------------------------------------
-
-    def _refresh_remote(self):
+    def enqueue_drop(self, paths: list[str], dgx_dest_dir: str = ""):
+        """
+        Called from MainWindow when files are dropped onto the DGX canvas.
+        Builds a job and starts it immediately.
+        """
         if not self._conn:
+            log.warning("enqueue_drop: no connection")
             return
-        folder = self._folder_combo.currentText()
-        self._remote_list.clear()
-        self._status_lbl.setText(f"Loading {folder}/…")
-        t = _ListFilesThread(self._conn, folder)
-        t.result.connect(self._on_file_list)
-        t.start()
 
-    def _on_file_list(self, data: dict):
-        self._status_lbl.setText("")
-        self._remote_list.clear()
-        if not data.get("ok"):
-            self._remote_list.addItem(f"Error: {data.get('error', '?')}")
+        job = self._session.make_job(paths, dgx_dest_dir)
+        if not job.items:
+            log.warning("enqueue_drop: no transferable items in drop")
             return
-        for f in data.get("files", []):
-            item = QListWidgetItem(f"📄  {f['name']}  ({f.get('size_human','?')})")
-            item.setData(Qt.ItemDataRole.UserRole, f["name"])
-            self._remote_list.addItem(item)
 
-    def _remote_context_menu(self, pos):
-        from PyQt6.QtWidgets import QMenu
-        item = self._remote_list.itemAt(pos)
-        if not item:
-            return
-        menu = QMenu(self)
-        menu.addAction("⬇  Download", self._download_selected)
-        menu.addAction("🗑  Delete",  self._delete_selected)
-        menu.exec(self._remote_list.mapToGlobal(pos))
+        self._empty_lbl.hide()
+        row = _JobRow(job)
+        # Insert before the stretch at the end
+        count = self._jobs_layout.count()
+        self._jobs_layout.insertWidget(count - 1, row)
+        self._job_rows[job.job_id] = row
 
-    def _download_selected(self):
-        item = self._remote_list.currentItem()
-        if not item or not self._conn:
-            return
-        filename = item.data(Qt.ItemDataRole.UserRole)
-        folder   = self._folder_combo.currentText()
-        dest_dir = QFileDialog.getExistingDirectory(self, "Save to folder")
-        if not dest_dir:
-            return
-        self._status_lbl.setText(f"Downloading {filename} …")
+        worker = TransferWorker(job, self._conn, self._session)
+        worker.item_progress.connect(
+            lambda iid, done, total, r=row: r.on_item_progress(iid, done, total)
+        )
+        worker.item_status.connect(
+            lambda iid, st, msg, r=row: r.on_item_status(iid, st, msg)
+        )
+        worker.job_progress.connect(
+            lambda done, total, r=row: r.on_job_progress(done, total)
+        )
+        worker.job_complete.connect(self._on_job_complete)
+        self._workers.append(worker)
+        worker.start()
 
-        def _done(result: dict):
-            if result.get("ok"):
-                self._status_lbl.setText(f"Downloaded  {filename}  ✓")
-            else:
-                self._status_lbl.setText(f"Download failed: {result.get('error', '?')}")
+        log.info("Started job %s: %d items → %s",
+                 job.job_id, len(job.items), dgx_dest_dir or "~/Desktop")
 
-        class _DLThread(QThread):
-            finished_dl = __import__('PyQt6.QtCore', fromlist=['pyqtSignal']).pyqtSignal(dict)
-            def __init__(s, c, fn, fo, dd):
-                super().__init__()
-                s._c, s._fn, s._fo, s._dd = c, fn, fo, dd
-            def run(s):
-                try:
-                    r = s._c.get_file(s._fn, s._fo, Path(s._dd))
-                    s.finished_dl.emit(r)
-                except Exception as e:
-                    s.finished_dl.emit({"ok": False, "error": str(e)})
+    def enqueue_paths(self, paths: list[str], dgx_dest: str = ""):
+        """Convenience alias (called from sidebar drop zone)."""
+        self.enqueue_drop(paths, dgx_dest)
 
-        t = _DLThread(self._conn, filename, folder, dest_dir)
-        t.finished_dl.connect(_done)
-        t.start()
+    # ── Internal slots ────────────────────────────────────────────────
 
-    def _delete_selected(self):
-        item = self._remote_list.currentItem()
-        if not item or not self._conn:
-            return
-        filename = item.data(Qt.ItemDataRole.UserRole)
-        if QMessageBox.question(
-            self, "Delete Remote File",
-            f"Delete  {filename}  from DGX?\nThis cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        ) != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            r = self._conn.rpc({
-                "type": "delete_file",
-                "folder": self._folder_combo.currentText(),
-                "filename": filename,
-            })
-            if r.get("ok"):
-                self._refresh_remote()
-            else:
-                QMessageBox.warning(self, "Delete Error", r.get("error", "Unknown error"))
-        except Exception as e:
-            QMessageBox.warning(self, "Delete Error", str(e))
+    @pyqtSlot(str, int, int)
+    def _on_job_complete(self, job_id: str, ok: int, fail: int):
+        log.info("Job %s finished: %d ok, %d failed", job_id, ok, fail)
+        # Clean up completed workers
+        self._workers = [w for w in self._workers if w.isRunning()]
+
+    def _clear_done(self):
+        for job_id, row in list(self._job_rows.items()):
+            if all(i.status in ("done", "failed")
+                   for i in self._job_rows[job_id]._job.items):
+                row.setParent(None)
+                row.deleteLater()
+                del self._job_rows[job_id]
+        if not self._job_rows:
+            self._empty_lbl.show()

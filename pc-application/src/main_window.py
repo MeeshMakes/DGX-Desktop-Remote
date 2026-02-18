@@ -403,7 +403,9 @@ class MainWindow(QMainWindow):
         self._set_status("connected")
         host = info.get("hostname", "DGX")
         self._lbl_host.setText(f"{host}  {w}×{h}@{hz}Hz")
-
+        # Notify transfer panel of new connection
+        if hasattr(self, "_transfer_panel"):
+            self._transfer_panel.set_connection(self.conn)
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(True, self.config.dgx_ip)
@@ -461,6 +463,9 @@ class MainWindow(QMainWindow):
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(False)
+        # Detach transfer panel from stale connection
+        if hasattr(self, "_transfer_panel"):
+            self._transfer_panel.set_connection(None)
         log.info("Disconnected from DGX")
 
     # ------------------------------------------------------------------
@@ -676,7 +681,7 @@ class MainWindow(QMainWindow):
         self._sidebar_container.setVisible(True)
         self._btn_files.setChecked(True)
         if hasattr(self, "_transfer_panel"):
-            self._transfer_panel.enqueue_paths(paths)
+            self._transfer_panel.enqueue_drop(paths)
 
     def _open_console(self):
         if self.console.isVisible():

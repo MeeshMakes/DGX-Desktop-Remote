@@ -39,9 +39,11 @@ def _is_port_free(port: int) -> bool:
             return False
 
 # ─── file transfer root ───────────────────────────────────────────────
-TRANSFER_ROOT = Path.home() / "Desktop" / "PC-Transfer"
+TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
+BRIDGE_STAGING = Path.home() / "BridgeStaging"
 for _d in ("inbox", "outbox", "staging", "archive"):
     (TRANSFER_ROOT / _d).mkdir(parents=True, exist_ok=True)
+BRIDGE_STAGING.mkdir(parents=True, exist_ok=True)
 
 CHUNK = 65536
 
@@ -301,13 +303,22 @@ class ClientSession:
         expected = msg.get("sha256", "")
         meta     = msg.get("metadata", {})
         name     = (meta.get("name") or msg.get("filename") or "received_file")
-        # Sanitize filename
+        # Sanitize filename — bare name only
         name = Path(name).name
 
-        if folder not in ("inbox", "outbox", "staging", "archive"):
+        # Route: BridgeStaging paths go under ~/ directly;
+        # legacy inbox/outbox/staging/archive go under TRANSFER_ROOT.
+        if folder.startswith("BridgeStaging/"):
+            # folder = "BridgeStaging/<session_id>"
+            session_id = folder.split("/", 1)[1]
+            dest_dir = BRIDGE_STAGING / session_id
+        elif folder in ("inbox", "outbox", "staging", "archive"):
+            dest_dir = TRANSFER_ROOT / folder
+        else:
             return {"ok": False, "error": "Invalid folder"}
 
-        dest = TRANSFER_ROOT / folder / name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / name
         sha  = hashlib.sha256()
         try:
             _send_json(self._rpc_conn, {"ok": True, "type": "ready"})
