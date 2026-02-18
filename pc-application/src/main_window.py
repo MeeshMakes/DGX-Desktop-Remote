@@ -663,7 +663,6 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         self._transfer_panel = TransferPanel(
             connection=self.conn,
-            config=self.config,
             parent=self._sidebar_container
         )
         layout.addWidget(self._transfer_panel)
