@@ -1,23 +1,68 @@
 """
 dgx-service/src/input_handler.py
-Inject mouse and keyboard input into the DGX X session using xdotool.
+
+Inject mouse and keyboard input into the DGX X session.
+
+PRIMARY:  python-xlib XTest extension — persistent X connection,
+          direct socket call per event, sub-millisecond latency.
+FALLBACK: xdotool subprocess (--sync removed to not block the input loop).
+
+The critical requirement is that mouse_move is processed as fast as
+events arrive (~100-165 Hz from the PC).  The old xdotool approach
+forked a new subprocess per event with --sync (waiting for X ack),
+costing ~10-50 ms each and causing the severe cursor lag.
 """
 
-import subprocess
-import shutil
 import logging
+import shutil
+import subprocess
+import threading
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_XDOTOOL = shutil.which("xdotool")
+# X11 mouse button numbers
+_MOUSE_BTN = {
+    "left":   1,
+    "middle": 2,
+    "right":  3,
+    "x1":     8,
+    "x2":     9,
+}
 
-# Map PC Qt key names → xdotool key names (subset covering common keys)
-_KEY_MAP: dict[str, str] = {
+# Qt key name → X keysym name
+_XLIB_KEY_MAP: dict[str, str] = {
+    "Return":    "Return",
+    "Enter":     "Return",
+    "BackSpace": "BackSpace",
+    "Tab":       "Tab",
+    "Escape":    "Escape",
+    "Delete":    "Delete",
+    "Insert":    "Insert",
+    "Home":      "Home",
+    "End":       "End",
+    "Page_Up":   "Page_Up",
+    "Page_Down": "Page_Down",
+    "Left":      "Left",
+    "Right":     "Right",
+    "Up":        "Up",
+    "Down":      "Down",
+    "space":     "space",
+    "Control":   "Control_L",
+    "Alt":       "Alt_L",
+    "Shift":     "Shift_L",
+    "Super":     "Super_L",
+    "CapsLock":  "Caps_Lock",
+    "NumLock":   "Num_Lock",
     "F1":  "F1",  "F2":  "F2",  "F3":  "F3",  "F4":  "F4",
     "F5":  "F5",  "F6":  "F6",  "F7":  "F7",  "F8":  "F8",
     "F9":  "F9",  "F10": "F10", "F11": "F11", "F12": "F12",
-    "Return":  "Return",  "Enter":  "Return",
+}
+
+# Qt key name → xdotool key name (fallback only)
+_XDOTOOL_KEY_MAP: dict[str, str] = {
+    "Return":    "Return",
+    "Enter":     "Return",
     "BackSpace": "BackSpace",
     "Tab":       "Tab",
     "Escape":    "Escape",
@@ -38,91 +83,172 @@ _KEY_MAP: dict[str, str] = {
     "Super":     "super",
     "CapsLock":  "Caps_Lock",
     "NumLock":   "Num_Lock",
-}
-
-# X11 mouse button numbers
-_MOUSE_BTN = {
-    "left":   1,
-    "middle": 2,
-    "right":  3,
-    "x1":     8,
-    "x2":     9,
+    "F1":  "F1",  "F2":  "F2",  "F3":  "F3",  "F4":  "F4",
+    "F5":  "F5",  "F6":  "F6",  "F7":  "F7",  "F8":  "F8",
+    "F9":  "F9",  "F10": "F10", "F11": "F11", "F12": "F12",
 }
 
 
-def _xdo(*args: str) -> bool:
-    """Run xdotool with given args. Returns True on success."""
-    if not _XDOTOOL:
-        log.error("xdotool not found — cannot inject input")
-        return False
+# ── Backend: python-xlib XTest (fast path) ────────────────────────────
+
+class _XlibBackend:
+    """
+    Direct X11 input via XTest extension.  No subprocesses.
+    Single persistent Display connection; lock protects concurrent calls.
+    Each mouse_move is a direct socket write to X — takes ~10-50 µs,
+    not 10-50 ms like a subprocess fork.
+    """
+
+    def __init__(self):
+        from Xlib import display as _Disp, X as _X
+        from Xlib.ext import xtest as _xtest
+        self._X     = _X
+        self._xtest = _xtest
+        self._dpy   = _Disp.Display()
+        self._lock  = threading.Lock()
+        if not self._dpy.has_extension("XTEST"):
+            raise RuntimeError("X server does not support XTEST extension")
+        log.info("XTest input backend ready (python-xlib) — zero subprocess overhead")
+
+    def _fi(self, event_type: int, detail: int = 0, x: int = 0, y: int = 0):
+        with self._lock:
+            self._xtest.fake_input(self._dpy, event_type, detail=detail, x=x, y=y)
+            self._dpy.flush()
+
+    def mouse_move(self, x: int, y: int):
+        self._fi(self._X.MotionNotify, x=x, y=y)
+
+    def mouse_press(self, button: str):
+        self._fi(self._X.ButtonPress, detail=_MOUSE_BTN.get(button.lower(), 1))
+
+    def mouse_release(self, button: str):
+        self._fi(self._X.ButtonRelease, detail=_MOUSE_BTN.get(button.lower(), 1))
+
+    def mouse_scroll(self, dx: int, dy: int):
+        # 4=scroll-up 5=scroll-down 6=scroll-left 7=scroll-right
+        btns: list[int] = []
+        if dy < 0:
+            btns += [4] * abs(dy)
+        elif dy > 0:
+            btns += [5] * abs(dy)
+        if dx < 0:
+            btns += [6] * abs(dx)
+        elif dx > 0:
+            btns += [7] * abs(dx)
+        with self._lock:
+            for b in btns:
+                self._xtest.fake_input(self._dpy, self._X.ButtonPress,   detail=b)
+                self._xtest.fake_input(self._dpy, self._X.ButtonRelease, detail=b)
+            self._dpy.flush()
+
+    def key_press(self, key: str):
+        kc = self._keycode(key)
+        if kc:
+            self._fi(self._X.KeyPress, detail=kc)
+
+    def key_release(self, key: str):
+        kc = self._keycode(key)
+        if kc:
+            self._fi(self._X.KeyRelease, detail=kc)
+
+    def _keycode(self, key: str) -> int:
+        from Xlib import XK
+        for name in (_XLIB_KEY_MAP.get(key, key), key):
+            sym = XK.string_to_keysym(name)
+            if sym:
+                kc = self._dpy.keysym_to_keycode(sym)
+                if kc:
+                    return kc
+        log.debug("No keycode for %r", key)
+        return 0
+
+
+# ── Backend: xdotool subprocess (fallback) ────────────────────────────
+
+class _XdotoolBackend:
+    """Subprocess fallback. --sync removed so the input loop doesn't block."""
+
+    _exe: Optional[str] = shutil.which("xdotool")
+
+    def _run(self, *args: str):
+        if not self._exe:
+            log.error("xdotool not found")
+            return
+        try:
+            subprocess.run([self._exe, *args], capture_output=True, timeout=0.3)
+        except Exception as e:
+            log.debug("xdotool: %s", e)
+
+    def mouse_move(self, x: int, y: int):
+        self._run("mousemove", str(x), str(y))   # no --sync
+
+    def mouse_press(self, button: str):
+        self._run("mousedown", str(_MOUSE_BTN.get(button.lower(), 1)))
+
+    def mouse_release(self, button: str):
+        self._run("mouseup", str(_MOUSE_BTN.get(button.lower(), 1)))
+
+    def mouse_scroll(self, dx: int, dy: int):
+        if dy < 0:
+            for _ in range(abs(dy)): self._run("click", "4")
+        elif dy > 0:
+            for _ in range(abs(dy)): self._run("click", "5")
+        if dx < 0:
+            for _ in range(abs(dx)): self._run("click", "6")
+        elif dx > 0:
+            for _ in range(abs(dx)): self._run("click", "7")
+
+    def key_press(self, key: str):
+        self._run("keydown", _XDOTOOL_KEY_MAP.get(key, key))
+
+    def key_release(self, key: str):
+        self._run("keyup", _XDOTOOL_KEY_MAP.get(key, key))
+
+
+# ── Auto-select backend on import ─────────────────────────────────────
+
+def _make_backend():
     try:
-        subprocess.run(
-            [_XDOTOOL, *args],
-            check=True,
-            capture_output=True,
-            timeout=0.5,
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        log.warning("xdotool error: %s", e.stderr.decode(errors="replace"))
-        return False
-    except subprocess.TimeoutExpired:
-        log.warning("xdotool timed out")
-        return False
+        return _XlibBackend()
+    except Exception as e:
+        log.warning("python-xlib XTest unavailable (%s) — falling back to xdotool", e)
+        return _XdotoolBackend()
 
+
+# ── Public API ────────────────────────────────────────────────────────
 
 class InputHandler:
-    """Public API called by the RPC handler for each input event."""
+    """
+    Single instance per DGXService.  Backend selected once at startup.
+    All methods are thread-safe (backend handles its own locking).
+    """
 
-    @staticmethod
-    def mouse_move(x: int, y: int, absolute: bool = True):
-        if absolute:
-            _xdo("mousemove", "--sync", str(x), str(y))
-        else:
-            _xdo("mousemove_relative", "--sync", str(x), str(y))
+    def __init__(self):
+        self._backend = _make_backend()
 
-    @staticmethod
-    def mouse_press(button: str             = "left"):
-        btn = _MOUSE_BTN.get(button.lower(), 1)
-        _xdo("mousedown", str(btn))
+    def mouse_move(self, x: int, y: int, absolute: bool = True):
+        self._backend.mouse_move(x, y)
 
-    @staticmethod
-    def mouse_release(button: str           = "left"):
-        btn = _MOUSE_BTN.get(button.lower(), 1)
-        _xdo("mouseup", str(btn))
+    def mouse_press(self, button: str = "left"):
+        self._backend.mouse_press(button)
 
-    @staticmethod
-    def mouse_click(button: str             = "left"):
-        btn = _MOUSE_BTN.get(button.lower(), 1)
-        _xdo("click", str(btn))
+    def mouse_release(self, button: str = "left"):
+        self._backend.mouse_release(button)
 
-    @staticmethod
-    def mouse_scroll(dx: int, dy: int):
-        """Positive dy = scroll down (button 5), negative = scroll up (button 4)."""
-        if dy > 0:
-            for _ in range(abs(dy)):
-                _xdo("click", "5")
-        elif dy < 0:
-            for _ in range(abs(dy)):
-                _xdo("click", "4")
-        if dx > 0:
-            for _ in range(abs(dx)):
-                _xdo("click", "7")
-        elif dx < 0:
-            for _ in range(abs(dx)):
-                _xdo("click", "6")
+    def mouse_click(self, button: str = "left"):
+        self._backend.mouse_press(button)
+        self._backend.mouse_release(button)
 
-    @staticmethod
-    def key_press(key: str):
-        xkey = _KEY_MAP.get(key, key)
-        _xdo("keydown", xkey)
+    def mouse_scroll(self, dx: int, dy: int):
+        self._backend.mouse_scroll(dx, dy)
 
-    @staticmethod
-    def key_release(key: str):
-        xkey = _KEY_MAP.get(key, key)
-        _xdo("keyup", xkey)
+    def key_press(self, key: str):
+        self._backend.key_press(key)
 
-    @staticmethod
-    def type_text(text: str):
-        """Type a string using xdotool type (good for printable ASCII)."""
-        _xdo("type", "--clearmodifiers", "--delay", "0", text)
+    def key_release(self, key: str):
+        self._backend.key_release(key)
+
+    def type_text(self, text: str):
+        for ch in text:
+            self._backend.key_press(ch)
+            self._backend.key_release(ch)

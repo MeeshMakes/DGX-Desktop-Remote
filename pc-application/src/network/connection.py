@@ -48,6 +48,12 @@ class DGXConnection:
         self._on_ping_update = on_ping_update
         self._on_cursor      = on_cursor
 
+        # Mouse-move coalescing: only the latest position is sent per cycle
+        self._mouse_x:    int   = -1
+        self._mouse_y:    int   = -1
+        self._mouse_dirty = False
+        self._mouse_lock  = threading.Lock()
+
         # Stats
         self.ping_ms:     float = 0.0
         self.fps_actual:  float = 0.0
@@ -109,6 +115,8 @@ class DGXConnection:
                               name="RPCPushListener", daemon=True).start()
             threading.Thread(target=self._ping_loop,
                               name="PingMonitor", daemon=True).start()
+            threading.Thread(target=self._mouse_flush_loop,
+                              name="MouseFlusher", daemon=True).start()
 
             log.info(f"Connected to DGX @ {dgx_ip}")
             return info
@@ -134,7 +142,11 @@ class DGXConnection:
     # ------------------------------------------------------------------
 
     def send_mouse_move(self, x: int, y: int):
-        self._send_input({"type": "mouse_move", "x": x, "y": y})
+        """Queue a mouse move — coalesced and flushed by _mouse_flush_loop."""
+        with self._mouse_lock:
+            self._mouse_x = x
+            self._mouse_y = y
+            self._mouse_dirty = True
 
     def send_mouse_press(self, button: str, x: int, y: int):
         self._send_input({"type": "mouse_press", "button": button, "x": x, "y": y})
@@ -367,6 +379,24 @@ class DGXConnection:
             except Exception as e:
                 log.debug("RPC push loop error: %s", e)
                 break
+
+    def _mouse_flush_loop(self):
+        """
+        Dedicated thread: sends the latest queued mouse position as fast
+        as the socket allows.  Runs at ~500 Hz (0.002 s sleep) — well above
+        the DGX display rate so no moves are perceptibly dropped.  Coalescing
+        means high-frequency PC polling (165 Hz) never floods the TCP buffer.
+        """
+        import time as _time
+        while self._connected and self._input_sock:
+            with self._mouse_lock:
+                dirty = self._mouse_dirty
+                x, y  = self._mouse_x, self._mouse_y
+                if dirty:
+                    self._mouse_dirty = False
+            if dirty:
+                self._send_input({"type": "mouse_move", "x": x, "y": y})
+            _time.sleep(0.002)   # 500 Hz ceiling — adjust if needed
 
     def _ping_loop(self):
         """Send a ping every 2 seconds, update ping_ms."""
