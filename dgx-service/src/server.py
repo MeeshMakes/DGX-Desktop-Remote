@@ -89,10 +89,36 @@ class ClientSession:
         self._lock      = threading.Lock()
 
     def set_video_conn(self, conn: socket.socket):
+        """Accept the video channel socket and drain the start_stream handshake."""
         self._vid_conn = conn
+        # Drain the PC's opening start_stream message (no response needed)
+        try:
+            conn.settimeout(3)
+            buf = b""
+            while b"\n" not in buf:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            conn.settimeout(None)
+        except Exception:
+            pass
 
     def set_input_conn(self, conn: socket.socket):
+        """Accept the input channel socket, drain start_input, then start loop."""
         self._inp_conn = conn
+        # Drain the PC's opening start_input message (no response needed)
+        try:
+            conn.settimeout(3)
+            buf = b""
+            while b"\n" not in buf:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            conn.settimeout(None)
+        except Exception:
+            pass
         threading.Thread(target=self._input_loop, daemon=True).start()
 
     def run(self):

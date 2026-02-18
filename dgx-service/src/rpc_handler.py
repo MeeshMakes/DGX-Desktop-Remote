@@ -58,6 +58,28 @@ class RPCHandler:
     def handle_ping(self, msg: dict) -> dict:
         return {"ok": True, "type": "pong"}
 
+    def handle_hello(self, msg: dict) -> dict:
+        """
+        Opening handshake from PC client.
+        Returns system info so the PC can set up resolution, hostname etc.
+        in one round-trip instead of a separate get_system_info call.
+        """
+        w, h = self._svc.resolution_monitor.current
+        import shutil, socket as _sock, platform
+        du = shutil.disk_usage(__import__('pathlib').Path.home())
+        return {
+            "ok":           True,
+            "type":         "hello_ack",
+            "hostname":     _sock.gethostname(),
+            "os":           f"{platform.system()} {platform.release()}",
+            "width":        w,
+            "height":       h,
+            "refresh_hz":   self._svc.capture._fps,
+            "disk_free_gb": round(du.free / 1e9, 1),
+            "gpus":         self._get_gpu_info(),
+            "display":      {"width": w, "height": h, "refresh_hz": self._svc.capture._fps},
+        }
+
     def handle_get_system_info(self, msg: dict) -> dict:
         w, h = self._svc.resolution_monitor.current
         du    = shutil.disk_usage(Path.home())
