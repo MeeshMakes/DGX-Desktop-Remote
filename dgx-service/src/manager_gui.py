@@ -11,7 +11,8 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QFormLayout, QSpinBox, QCheckBox, QDialog
+    QGroupBox, QFormLayout, QSpinBox, QCheckBox, QDialog,
+    QLineEdit
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui  import QIcon, QPixmap, QPainter, QColor, QBrush

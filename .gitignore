@@ -31,3 +31,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# Windows null artifact
+nul

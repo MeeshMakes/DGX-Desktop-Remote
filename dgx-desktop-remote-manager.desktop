@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DGX Desktop Remote Manager
+Comment=DGX Desktop Remote — Service Manager GUI
+Exec=/home/fathom-dgx/Desktop/DGX-Desktop-Remote-master/.venv/bin/python /home/fathom-dgx/Desktop/DGX-Desktop-Remote-master/dgx-service/src/dgx_service.py
+Icon=/home/fathom-dgx/.local/share/icons/dgx-desktop-remote.png
+Path=/home/fathom-dgx/Desktop/DGX-Desktop-Remote-master/dgx-service/src
+Terminal=false
+Categories=Utility;Network;
+StartupNotify=true
+StartupWMClass=DGX-Desktop-Remote
