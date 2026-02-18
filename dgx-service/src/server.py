@@ -338,6 +338,17 @@ class DGXService:
                     break
 
     def _handle_negotiation(self, conn: socket.socket, addr):
+        """
+        Respond to a port-negotiation request.
+
+        We always advertise the fixed ports this service is *already* listening
+        on (set up in start()).  We never spawn new listener threads here —
+        doing so caused port exhaustion: every retry allocated a fresh triplet
+        that was never released.
+
+        If a session is currently active we reject the request so the PC
+        backs off rather than stacking up zombie connections.
+        """
         try:
             conn.settimeout(8)
             buf = b""
@@ -351,44 +362,23 @@ class DGXService:
                 _send_json(conn, {"ok": False, "error": "expected negotiate"})
                 return
 
-            candidates = msg.get("candidates", [])
-            # Pick first 3 candidates that are also free on DGX
-            chosen = []
-            for p in candidates:
-                if _is_port_free(p):
-                    chosen.append(p)
-                if len(chosen) == 3:
-                    break
+            # Reject if a session is already running
+            with self._session_lock:
+                if self._session and self._session._running:
+                    _send_json(conn, {"ok": False, "error": "session already active"})
+                    log.info("Rejected negotiation from %s — session already active", addr)
+                    return
 
-            if len(chosen) < 3:
-                # Fall back to scanning our own range
-                for p in range(PORT_RANGE_START, PORT_RANGE_END + 1):
-                    if _is_port_free(p) and p not in chosen:
-                        chosen.append(p)
-                    if len(chosen) == 3:
-                        break
-
-            if len(chosen) < 3:
-                _send_json(conn, {"ok": False, "error": "no free ports available"})
-                return
-
-            rpc_p, vid_p, inp_p = chosen[0], chosen[1], chosen[2]
-            _send_json(conn, {"ok": True, "rpc": rpc_p, "video": vid_p, "input": inp_p})
-            log.info("Negotiated ports — RPC:%d  Video:%d  Input:%d", rpc_p, vid_p, inp_p)
-
-            # Restart data listeners on the agreed ports
-            self.rpc_port   = rpc_p
-            self.video_port = vid_p
-            self.input_port = inp_p
-            for tag, port, handler in [
-                ("rpc",   rpc_p, self._accept_rpc),
-                ("video", vid_p, self._accept_video),
-                ("input", inp_p, self._accept_input),
-            ]:
-                threading.Thread(
-                    target=handler, args=(port,), daemon=True,
-                    name=f"Listener-{tag}-{port}",
-                ).start()
+            # Tell the PC to use the ports we're already listening on.
+            # No new listeners are spawned — no port exhaustion.
+            _send_json(conn, {
+                "ok":    True,
+                "rpc":   self.rpc_port,
+                "video": self.video_port,
+                "input": self.input_port,
+            })
+            log.info("Negotiated ports — RPC:%d  Video:%d  Input:%d",
+                     self.rpc_port, self.video_port, self.input_port)
 
         except Exception as e:
             log.exception("Error during negotiation: %s", e)

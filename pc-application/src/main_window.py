@@ -141,6 +141,8 @@ class MainWindow(QMainWindow):
         self._is_connecting = False          # guard against overlapping attempts
         self._watchdog_suppressed = False    # True while a connect attempt is in flight
         self._closing = False                # set in closeEvent to suppress late callbacks
+        self._watchdog_fail_count = 0        # consecutive failures — drives backoff
+        self._watchdog_interval = max(3, config.reconnect_interval)  # current interval (s)
 
         # Wire disconnect signal → slot (always runs on main/GUI thread)
         self._disconnect_signal.connect(self._on_disconnect_ui)
@@ -384,6 +386,11 @@ class MainWindow(QMainWindow):
         self.canvas.connection = self.conn
         self.canvas.mapper     = self.mapper
 
+        # Reset backoff on success
+        self._watchdog_fail_count = 0
+        self._watchdog_interval   = max(3, self.config.reconnect_interval)
+        self._watchdog.setInterval(self._watchdog_interval * 1000)
+
         self._btn_connect.setText("  Disconnect")
         self._btn_connect.setEnabled(True)
         self._btn_connect.setProperty("class", "danger")
@@ -416,8 +423,14 @@ class MainWindow(QMainWindow):
         self._btn_connect.style().polish(self._btn_connect)
         self._status_pill.set_state("error")
         if self.config.auto_reconnect:
-            self._lbl_host.setText("Waiting for DGX…")
-            log.debug(f"Reconnect attempt failed (will retry): {error}")
+            # Exponential backoff: double the interval on each failure, cap at 60 s
+            self._watchdog_fail_count += 1
+            base = max(3, self.config.reconnect_interval)
+            self._watchdog_interval = min(60, base * (2 ** min(self._watchdog_fail_count - 1, 4)))
+            self._watchdog.setInterval(self._watchdog_interval * 1000)
+            self._lbl_host.setText(f"Waiting for DGX… (retry in {self._watchdog_interval}s)")
+            log.debug("Reconnect attempt failed (retry in %ds): %s",
+                      self._watchdog_interval, error)
         else:
             self._lbl_host.setText(f"Failed: {error}")
             log.warning(f"Connection failed: {error}")
