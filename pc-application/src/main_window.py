@@ -701,20 +701,41 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         """
-        Snap window height so the canvas stays at the exact DGX aspect ratio.
-        This guarantees mouse coordinates never drift — every canvas pixel
-        maps 1:1 to a DGX pixel with no letterbox offset.
+        Snap the window to the exact DGX aspect ratio while windowed.
+        If the required height would exceed the available screen area,
+        shrink the width instead so the window always fits on screen.
         """
         super().resizeEvent(event)
         ratio = getattr(self, "_dgx_ratio", 0)
         if ratio <= 0 or self.isFullScreen() or self.isMaximized():
             return
-        # Header bar height = everything above the canvas
-        header_h = self.height() - self.canvas.height()
+
+        header_h        = self.height() - self.canvas.height()
         target_canvas_h = int(self.canvas.width() * ratio)
         target_win_h    = target_canvas_h + header_h
+
+        # Cap to available screen height so the window never goes off-screen
+        screen = self.screen()
+        if screen:
+            max_h = screen.availableGeometry().height()
+            if target_win_h > max_h:
+                # Reduce width until the height fits
+                target_canvas_h = max_h - header_h
+                target_win_w    = int(target_canvas_h / ratio)
+                if abs(self.width() - target_win_w) > 2:
+                    self.resize(target_win_w, max_h)
+                return
+
         if abs(self.height() - target_win_h) > 2:
             self.resize(self.width(), target_win_h)
+
+    def changeEvent(self, event):
+        """Re-scale when entering or leaving fullscreen."""
+        super().changeEvent(event)
+        from PyQt6.QtCore import QEvent
+        if event.type() == QEvent.Type.WindowStateChange:
+            # Defer until Qt has finished applying the new state
+            QTimer.singleShot(50, self.canvas._apply_scale)
 
     def _restore_geometry(self):
         c = self.config
