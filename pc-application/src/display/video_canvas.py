@@ -104,7 +104,7 @@ class VideoCanvas(QLabel):
         )
         scaled = self._last_raw.scaled(
             self.size(), mode,
-            Qt.TransformationMode.FastTransformation
+            Qt.TransformationMode.SmoothTransformation
         )
         self._pixmap_w = scaled.width()
         self._pixmap_h = scaled.height()

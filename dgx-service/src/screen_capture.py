@@ -101,9 +101,10 @@ class ScreenCapture:
                 raw     = sct.grab(mon)
                 img     = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
 
-                # Encode to JPEG in memory
+                # Encode to JPEG — high quality, no chroma subsampling
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=self._quality, optimize=False)
+                img.save(buf, format="JPEG", quality=self._quality,
+                         subsampling=0, optimize=False)
                 jpeg = buf.getvalue()
 
                 if self._cb:

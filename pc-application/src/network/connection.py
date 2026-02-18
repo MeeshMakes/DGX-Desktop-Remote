@@ -98,7 +98,7 @@ class DGXConnection:
                 "type":     "start_stream",
                 "fps":      60,
                 "encoding": "jpeg",
-                "quality":  85
+                "quality":  95
             })
 
             # 3. Input channel

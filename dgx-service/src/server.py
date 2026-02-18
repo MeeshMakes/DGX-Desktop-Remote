@@ -371,7 +371,7 @@ class DGXService:
         video_port:  int  = 22011,
         input_port:  int  = 22012,
         fps:         int  = 60,
-        quality:     int  = 85,
+        quality:     int  = 95,
     ):
         self.host        = host
         self.rpc_port    = rpc_port

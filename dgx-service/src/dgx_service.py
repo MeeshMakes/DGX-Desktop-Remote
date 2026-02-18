@@ -37,7 +37,7 @@ def parse_args():
     ap.add_argument("--video",   type=int, default=22011, help="Video port")
     ap.add_argument("--input",   type=int, default=22012, help="Input port")
     ap.add_argument("--fps",     type=int, default=60,    help="Target FPS")
-    ap.add_argument("--quality", type=int, default=85,    help="JPEG quality (40-100)")
+    ap.add_argument("--quality", type=int, default=95,    help="JPEG quality (40-100)")
     ap.add_argument("--no-gui",  action="store_true",     help="Run headless (no tray)")
     return ap.parse_args()
 
