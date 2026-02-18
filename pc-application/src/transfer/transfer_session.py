@@ -34,6 +34,11 @@ _LOG_DIR    = _BASE_DIR / "logs"
 for _d in (_STAGE_ROOT, _LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
+# Repo-local bridge-prep folder (visible next to the source code)
+_REPO_ROOT   = Path(__file__).parents[3]   # DGX-Desktop-Remote/
+_BRIDGE_PREP = _REPO_ROOT / "bridge-prep"
+_BRIDGE_PREP.mkdir(parents=True, exist_ok=True)
+
 # ── DGX-side paths ────────────────────────────────────────────────────
 DGX_STAGE_ROOT = "BridgeStaging"   # relative to DGX home (~/)
 DGX_DEFAULT_DEST = "Desktop"        # default drop destination on DGX
@@ -75,6 +80,7 @@ class TransferItem:
     local_path:  Path
     dgx_dest:    str          # absolute DGX destination path (e.g. ~/Desktop/file.txt)
     item_id:     str = field(default_factory=lambda: str(uuid.uuid4()))
+    dgx_name:    str = ""     # filename on DGX (may differ after conversion, e.g. .bat→.sh)
     # Runtime
     status:      str   = "queued"
     error_msg:   str   = ""
@@ -138,6 +144,22 @@ class TransferSession:
     def dgx_stage_path(self) -> str:
         """Path on DGX where staged files land (relative to home)."""
         return f"{DGX_STAGE_ROOT}/{self._session_id}"
+
+    @property
+    def local_prep_path(self) -> Path:
+        """Repo-local bridge-prep directory for this session.
+
+        Files are copied and converted here so you can inspect the
+        exact bytes that will land on the DGX before transfer starts.
+        """
+        path = _BRIDGE_PREP / self._session_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def open_prep_dir(self):
+        """Open the local bridge-prep directory in Explorer."""
+        import subprocess
+        subprocess.Popen(["explorer", str(self.local_prep_path)])
 
     # ── Job factory ───────────────────────────────────────────────────
 

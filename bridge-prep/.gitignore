@@ -1,0 +1,4 @@
+# bridge-prep/ is ephemeral — contents are generated at runtime when files are
+# staged for the DGX bridge transfer workflow. Never commit prep files.
+*
+!.gitignore

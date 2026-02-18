@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "test": true,
+  "items": [
+    "a",
+    "b",
+    "c"
+  ]
+}

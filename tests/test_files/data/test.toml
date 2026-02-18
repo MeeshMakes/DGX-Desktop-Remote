@@ -1,0 +1,15 @@
+[project]
+name = "dgx-bridge-test"
+version = "1.0.0"
+
+[settings]
+verbose = true
+max_connections = 4
+
+[[items]]
+id = 1
+label = "alpha"
+
+[[items]]
+id = 2
+label = "beta"

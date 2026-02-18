@@ -53,6 +53,7 @@ class _FileRow(QWidget):
         "running":    f"color: {ACCENT};",
         "verifying":  f"color: {WARNING};",
         "done":       f"color: {SUCCESS};",
+        "bridge":     f"color: {ACCENT};",
         "failed":     f"color: {ERROR};",
     }
     _STATUS_ICON = {
@@ -60,6 +61,7 @@ class _FileRow(QWidget):
         "running":   "⬆",
         "verifying": "🔍",
         "done":      "✅",
+        "bridge":    "🎯",
         "failed":    "❌",
     }
 
@@ -77,7 +79,11 @@ class _FileRow(QWidget):
         self._icon.setStyleSheet("font-size: 11px;")
         l.addWidget(self._icon)
 
-        self._name = QLabel(item.local_path.name)
+        # Show converted name when .bat→.sh etc.
+        display_name = (item.dgx_name
+                        if item.dgx_name and item.dgx_name != item.local_path.name
+                        else item.local_path.name)
+        self._name = QLabel(display_name)
         self._name.setStyleSheet(f"color: {TEXT_MAIN}; font-size: 11px;")
         self._name.setMaximumWidth(140)
         l.addWidget(self._name)
@@ -122,6 +128,10 @@ class _FileRow(QWidget):
         if status == "running":
             pct = self._bar.value()
             self._msg.setText(f"{pct}%")
+        elif status == "bridge":
+            self._bar.setValue(100)
+            self._msg.setText("in bridge")
+            self._msg.setStyleSheet(f"color: {ACCENT}; font-size: 10px;")
         elif status in ("done", "failed"):
             self._bar.setValue(100 if status == "done" else self._bar.value())
             self._msg.setText("✓" if status == "done" else msg[:20] if msg else "error")
@@ -131,6 +141,75 @@ class _FileRow(QWidget):
                 self._msg.setToolTip(msg)
         elif status == "verifying":
             self._msg.setText("checking…")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Bridge-ready banner (shown inside _JobRow once files land in DGX)
+# ──────────────────────────────────────────────────────────────────────
+
+class _BridgeBanner(QWidget):
+    open_dgx_requested  = pyqtSignal(str)   # session_id
+    open_prep_requested = pyqtSignal()
+
+    def __init__(self, job: TransferJob, parent=None):
+        super().__init__(parent)
+        self._session_id = job.session_id
+
+        self.setStyleSheet(
+            f"background: {ACCENT}18; border: 1px solid {ACCENT}44; border-radius: 6px;"
+        )
+        bl = QVBoxLayout(self)
+        bl.setContentsMargins(10, 6, 10, 6)
+        bl.setSpacing(4)
+
+        lbl = QLabel("🎯  Files are ready in the DGX Bridge folder")
+        lbl.setStyleSheet(
+            f"color: {ACCENT}; font-size: 11px; font-weight: 600;"
+            "border: none;"
+        )
+        bl.addWidget(lbl)
+
+        hint = QLabel(
+            "Move your mouse into the DGX view — the bridge folder is open.\n"
+            "Drag files from there to wherever you want on the DGX."
+        )
+        hint.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; border: none;")
+        hint.setWordWrap(True)
+        bl.addWidget(hint)
+
+        btn_row = QWidget()
+        btn_row.setStyleSheet("background: transparent; border: none;")
+        brl = QHBoxLayout(btn_row)
+        brl.setContentsMargins(0, 2, 0, 0)
+        brl.setSpacing(4)
+
+        def _btn(text: str, tip: str = "") -> QPushButton:
+            b = QPushButton(text)
+            b.setFixedHeight(22)
+            b.setStyleSheet(
+                f"QPushButton {{ background: {BG_SURFACE}; color: {ACCENT};"
+                f"border: 1px solid {ACCENT}44; border-radius: 4px;"
+                f"font-size: 10px; padding: 0 6px; }}"
+                f"QPushButton:hover {{ background: {ACCENT}22; }}"
+            )
+            if tip:
+                b.setToolTip(tip)
+            return b
+
+        btn_dgx = _btn("📂 Open on DGX",
+                       "Opens ~/BridgeStaging in the DGX file manager")
+        btn_dgx.clicked.connect(
+            lambda: self.open_dgx_requested.emit(self._session_id)
+        )
+        brl.addWidget(btn_dgx)
+
+        btn_local = _btn("📁 Open local prep",
+                         "Open the converted files in Windows Explorer")
+        btn_local.clicked.connect(self.open_prep_requested)
+        brl.addWidget(btn_local)
+        brl.addStretch()
+
+        bl.addWidget(btn_row)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -190,6 +269,11 @@ class _JobRow(QWidget):
             root.addWidget(row)
             self._file_rows[item.item_id] = row
 
+        # ── Bridge banner (shown when all files land in DGX staging) ──
+        self._bridge_banner = _BridgeBanner(job)
+        root.addWidget(self._bridge_banner)
+        self._bridge_banner.hide()
+
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -223,6 +307,13 @@ class _JobRow(QWidget):
             self._job_lbl.setText("✅ done")
             self._job_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
             self._job_bar.setValue(len(items))
+            self._bridge_banner.hide()
+        elif all(s in ("bridge", "done") for s in statuses) \
+                and any(s == "bridge" for s in statuses):
+            self._job_lbl.setText("🎯 in bridge")
+            self._job_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 10px;")
+            self._job_bar.setValue(len(items))
+            self._bridge_banner.show()
         elif any(s == "failed" for s in statuses):
             fc = sum(1 for s in statuses if s == "failed")
             self._job_lbl.setText(f"⚠ {fc} failed")
@@ -388,7 +479,13 @@ class TransferPanel(QWidget):
         worker.job_progress.connect(
             lambda done, total, r=row: r.on_job_progress(done, total)
         )
+        worker.job_bridge_ready.connect(self._on_job_bridge_ready)
         worker.job_complete.connect(self._on_job_complete)
+
+        # Wire bridge banner buttons
+        row._bridge_banner.open_dgx_requested.connect(self._open_bridge_folder_on_dgx)
+        row._bridge_banner.open_prep_requested.connect(self._session.open_prep_dir)
+
         self._workers.append(worker)
         worker.start()
 
@@ -406,6 +503,23 @@ class TransferPanel(QWidget):
         log.info("Job %s finished: %d ok, %d failed", job_id, ok, fail)
         # Clean up completed workers
         self._workers = [w for w in self._workers if w.isRunning()]
+
+    @pyqtSlot(str, str)
+    def _on_job_bridge_ready(self, job_id: str, session_id: str):
+        """Called when all items in a job reach 'bridge' status."""
+        log.info("Job %s bridge-ready in session %s", job_id, session_id)
+        # Automatically open the DGX staging folder so the user can drag files
+        self._open_bridge_folder_on_dgx(session_id)
+
+    def _open_bridge_folder_on_dgx(self, session_id: str):
+        """Send RPC to DGX to open the bridge staging folder in its file manager."""
+        if not self._conn:
+            log.warning("_open_bridge_folder_on_dgx: no connection")
+            return
+        try:
+            self._conn.rpc({"type": "open_bridge_folder", "session_id": session_id})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("open_bridge_folder RPC failed: %s", exc)
 
     def _clear_done(self):
         for job_id, row in list(self._job_rows.items()):

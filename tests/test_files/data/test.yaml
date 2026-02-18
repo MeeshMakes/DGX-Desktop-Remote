@@ -1,0 +1,10 @@
+version: 1
+name: dgx-bridge-test
+settings:
+  verbose: true
+  max_connections: 4
+items:
+  - id: 1
+    label: alpha
+  - id: 2
+    label: beta

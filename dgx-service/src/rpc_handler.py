@@ -232,6 +232,20 @@ class RPCHandler:
             shutil.rmtree(stage_dir, ignore_errors=True)
         return {"ok": True}
 
+    def handle_open_bridge_folder(self, msg: dict) -> dict:
+        """Open the bridge staging folder in the DGX file manager (xdg-open)."""
+        session_id = msg.get("session_id", "")
+        if not session_id:
+            return {"ok": False, "error": "Missing session_id"}
+        folder = BRIDGE_STAGING / session_id
+        if not folder.exists():
+            return {"ok": False, "error": f"Bridge folder not found: {folder}"}
+        try:
+            subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
     # ------------------------------------------------------------------
     # Input (dispatched from input channel, but RPC versions useful too)
     # ------------------------------------------------------------------

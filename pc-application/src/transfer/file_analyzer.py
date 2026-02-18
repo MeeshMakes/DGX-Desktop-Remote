@@ -44,6 +44,10 @@ _TEXT_EXTENSIONS = {
     ".c", ".h", ".cpp", ".hpp", ".cxx", ".cc", ".cs", ".java",
     ".go", ".rs", ".rb", ".php", ".pl", ".r", ".m", ".tex",
     ".sql", ".Makefile", ".dockerfile", ".gitignore",
+    # Windows scripts — treated as text, converted to .sh on DGX
+    ".bat", ".cmd", ".ps1", ".ps1xml", ".psm1", ".psd1",
+    # Registry / INF / config formats
+    ".reg", ".inf", ".nfo",
 }
 
 
