@@ -169,10 +169,12 @@ class ClientSession:
                 t = msg.get("type", "")
 
                 # File receive (upload from PC to DGX)
-                if t == "file_send":
+                # Accept both "file_send" (internal) and "put_file" (PC client alias)
+                if t in ("file_send", "put_file"):
                     resp = self._handle_file_receive(msg)
                 # File send (download from DGX to PC)
-                elif t == "file_get":
+                # Accept both "file_get" (internal) and "get_file" (PC client alias)
+                elif t in ("file_get", "get_file"):
                     resp = self._handle_file_send(msg)
                 else:
                     resp = self._svc.rpc.dispatch(msg)
@@ -298,7 +300,8 @@ class ClientSession:
     # ------------------------------------------------------------------
 
     def _handle_file_receive(self, msg: dict) -> dict:
-        folder   = msg.get("folder", "inbox")
+        # Accept "destination" (PC client) or "folder" (internal) field names
+        folder   = msg.get("destination") or msg.get("folder") or "inbox"
         size     = msg.get("size", 0)
         expected = msg.get("sha256", "")
         meta     = msg.get("metadata", {})
@@ -321,7 +324,9 @@ class ClientSession:
         dest = dest_dir / name
         sha  = hashlib.sha256()
         try:
-            _send_json(self._rpc_conn, {"ok": True, "type": "ready"})
+            # NOTE: do NOT send an intermediate "ready" here — the PC streams
+            # binary immediately without waiting for an ack, so any premature
+            # send would leave a stale message in the socket for the next call.
             with open(dest, "wb") as fh:
                 remaining = size
                 while remaining > 0:

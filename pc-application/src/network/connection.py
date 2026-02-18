@@ -233,7 +233,9 @@ class DGXConnection:
 
                 raw    = recv_line(self._rpc_sock)
                 result = json.loads(raw)
-                if result.get("checksum") and result["checksum"] != hasher.hexdigest():
+                # Server returns "sha256" field; accept either key for compat
+                remote_hex = result.get("sha256") or result.get("checksum", "")
+                if remote_hex and remote_hex != hasher.hexdigest():
                     return {"ok": False, "error": "checksum_mismatch"}
                 return result
 
