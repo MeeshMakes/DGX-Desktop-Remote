@@ -41,12 +41,14 @@ class VideoCanvas(QLabel):
         self.mapper:      Optional[CoordinateMapper] = None
         self.cursor_mode: str   = "bridge"  # "bridge" | "hidden" | "arrow"
         self._in_tunnel:  bool  = False
+        self._dgx_w:      int   = 0          # DGX native width  (set at connect)
+        self._dgx_h:      int   = 0          # DGX native height (set at connect)
         self._pixmap_w:   int   = 0
         self._pixmap_h:   int   = 0
-        self._last_raw:   Optional[QPixmap] = None   # last unscaled frame
+        self._last_raw:   Optional[QPixmap] = None
         self.fps_actual:  float = 0.0
         self._fps_times:  deque = deque(maxlen=120)
-        self._frame_ready.connect(self._set_pixmap)  # queued across threads
+        self._frame_ready.connect(self._set_pixmap)
 
     # ------------------------------------------------------------------
     # Frame update (called from network thread via queued invoke)
@@ -59,41 +61,67 @@ class VideoCanvas(QLabel):
             return
         now = time.monotonic()
         self._fps_times.append(now)
-        # Compute fps over last 1-second window
         cutoff = now - 1.0
         while self._fps_times and self._fps_times[0] < cutoff:
             self._fps_times.popleft()
         self.fps_actual = len(self._fps_times)
-
-        # Emit raw (unscaled) pixmap — scaling happens on the GUI thread in _set_pixmap
+        # Emit raw pixmap — all scaling done on GUI thread
         self._frame_ready.emit(QPixmap.fromImage(img))
 
     @pyqtSlot(QPixmap)
     def _set_pixmap(self, pixmap: QPixmap):
-        """GUI thread: scale the raw frame to current canvas size, preserving DGX aspect ratio."""
+        """GUI thread: store raw frame and fill the widget exactly."""
         self._last_raw = pixmap
         self._apply_scale()
 
     def _apply_scale(self):
-        """Scale _last_raw to current widget size and display it."""
+        """
+        Fill the widget with the last raw frame.
+        The widget geometry is already locked to the DGX aspect ratio
+        (enforced by hasHeightForWidth / MainWindow.resizeEvent), so we
+        stretch the frame to fill it completely — no letterbox bars,
+        no offset, and mouse coordinate mapping is always exact.
+        """
         if self._last_raw is None or self._last_raw.isNull():
             return
         scaled = self._last_raw.scaled(
             self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.AspectRatioMode.IgnoreAspectRatio,    # widget IS the ratio
             Qt.TransformationMode.FastTransformation
         )
         self._pixmap_w = scaled.width()
         self._pixmap_h = scaled.height()
         self.setPixmap(scaled)
 
+    # ------------------------------------------------------------------
+    # DGX resolution — locks the widget to the correct aspect ratio
+    # ------------------------------------------------------------------
+
+    def set_dgx_resolution(self, w: int, h: int):
+        """Called once on connect. Locks layout to DGX aspect ratio."""
+        self._dgx_w = w
+        self._dgx_h = h
+        # Re-hint the layout engine so the window snaps immediately
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:
+        return self._dgx_w > 0 and self._dgx_h > 0
+
+    def heightForWidth(self, width: int) -> int:
+        if self._dgx_w > 0 and self._dgx_h > 0:
+            return int(width * self._dgx_h / self._dgx_w)
+        return super().heightForWidth(width)
+
     def clear_frame(self):
         self.setPixmap(QPixmap())
-        self._last_raw  = None
-        self._pixmap_w  = 0
-        self._pixmap_h  = 0
+        self._last_raw = None
+        self._dgx_w    = 0
+        self._dgx_h    = 0
+        self._pixmap_w = 0
+        self._pixmap_h = 0
         self.fps_actual = 0.0
         self._fps_times.clear()
+        self.updateGeometry()
 
     # ------------------------------------------------------------------
     # Mouse events

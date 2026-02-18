@@ -138,11 +138,12 @@ class MainWindow(QMainWindow):
         self._connect_worker: Optional[_ConnectWorker] = None
         self._negotiate_worker: Optional[_NegotiateConnectWorker] = None
         self._transfer_panel_visible = False
-        self._is_connecting = False          # guard against overlapping attempts
-        self._watchdog_suppressed = False    # True while a connect attempt is in flight
-        self._closing = False                # set in closeEvent to suppress late callbacks
-        self._watchdog_fail_count = 0        # consecutive failures — drives backoff
-        self._watchdog_interval = max(3, config.reconnect_interval)  # current interval (s)
+        self._is_connecting = False
+        self._watchdog_suppressed = False
+        self._closing = False
+        self._watchdog_fail_count = 0
+        self._watchdog_interval = max(3, config.reconnect_interval)
+        self._dgx_ratio = 0   # h/w of DGX — set on connect, drives resizeEvent snap
 
         # Wire disconnect signal → slot (always runs on main/GUI thread)
         self._disconnect_signal.connect(self._on_disconnect_ui)
@@ -391,6 +392,8 @@ class MainWindow(QMainWindow):
         self.canvas.connection = self.conn
         self.canvas.mapper     = self.mapper
         self.canvas.cursor_mode = self.config.cursor_mode
+        self.canvas.set_dgx_resolution(w, h)   # locks canvas to DGX aspect ratio
+        self._dgx_ratio = h / w if w > 0 else 0  # used by resizeEvent
 
         # Reset backoff on success
         self._watchdog_fail_count = 0
@@ -448,7 +451,8 @@ class MainWindow(QMainWindow):
         self.canvas.connection = None
         self.canvas.mapper     = None
         self.canvas.clear_frame()
-        self.mapper = None
+        self.mapper    = None
+        self._dgx_ratio = 0   # release aspect ratio lock so window resizes freely
         self._btn_connect.setText("Connect")
         self._btn_connect.setEnabled(True)
         reconnecting = self.config.auto_reconnect and bool(self.config.dgx_ip)
@@ -675,6 +679,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Geometry persistence
     # ------------------------------------------------------------------
+
+    def resizeEvent(self, event):
+        """
+        Snap window height so the canvas stays at the exact DGX aspect ratio.
+        This guarantees mouse coordinates never drift — every canvas pixel
+        maps 1:1 to a DGX pixel with no letterbox offset.
+        """
+        super().resizeEvent(event)
+        ratio = getattr(self, "_dgx_ratio", 0)
+        if ratio <= 0 or self.isFullScreen() or self.isMaximized():
+            return
+        # Header bar height = everything above the canvas
+        header_h = self.height() - self.canvas.height()
+        target_canvas_h = int(self.canvas.width() * ratio)
+        target_win_h    = target_canvas_h + header_h
+        if abs(self.height() - target_win_h) > 2:
+            self.resize(self.width(), target_win_h)
 
     def _restore_geometry(self):
         c = self.config
