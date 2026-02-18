@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QFormLayout, QSpinBox, QCheckBox, QDialog,
     QLineEdit
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QLockFile
 from PyQt6.QtGui  import QIcon, QPixmap, QPainter, QColor, QBrush
 
 from console_window import ConsoleWindow
@@ -59,7 +59,8 @@ class ManagerWindow(QDialog):
 
         self.setWindowTitle("DGX Desktop Remote — Service Manager")
         self.setMinimumWidth(400)
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        # Normal top-level window: shows in taskbar, X button enabled
+        self.setWindowFlags(Qt.WindowType.Window)
 
         # Console window — captures all logs, auto-opens on errors
         self.console = ConsoleWindow(self, title="DGX Service — Console")
@@ -134,13 +135,13 @@ class ManagerWindow(QDialog):
         self._btn_stop = QPushButton("Stop Service")
         self._btn_stop.setProperty("class", "danger")
         self._btn_stop.clicked.connect(self._stop_service)
-        btn_hide = QPushButton("Minimize to Tray")
-        btn_hide.clicked.connect(self.hide)
+        btn_minimize = QPushButton("Minimize")
+        btn_minimize.clicked.connect(self.showMinimized)
         btn_console = QPushButton("🖥  Console")
         btn_console.setToolTip("Show live log / error console")
         btn_console.clicked.connect(self._toggle_console)
         btn_row.addWidget(btn_console)
-        btn_row.addWidget(btn_hide)
+        btn_row.addWidget(btn_minimize)
         btn_row.addWidget(self._btn_stop)
         l.addLayout(btn_row)
 
@@ -199,6 +200,17 @@ class ManagerWindow(QDialog):
                 daemon=True,
             ).start()
 
+    def closeEvent(self, event):
+        """X button — stop the service and terminate the process."""
+        event.accept()
+        if self._svc:
+            threading.Thread(
+                target=lambda: (__import__('time').sleep(0.1), self._svc.stop(), QApplication.quit()),
+                daemon=True,
+            ).start()
+        else:
+            QApplication.quit()
+
     def _on_status_changed(self, text: str, color: str):
         self._lbl_status.setText(text)
         self._lbl_status.setStyleSheet(f"color: {color}; font-weight: 600;")
@@ -232,24 +244,42 @@ def _make_icon():
 
 def run_manager_gui(service):
     """Call from dgx_service.py main thread to run the Qt manager."""
+    import tempfile
+
     app = QApplication.instance() or QApplication(sys.argv)
+
+    # ── Single-instance guard ─────────────────────────────────────────
+    _lock = QLockFile(os.path.join(tempfile.gettempdir(), "dgx-desktop-remote-manager.lock"))
+    if not _lock.tryLock(100):
+        logging.getLogger("dgx_service").warning(
+            "Manager GUI already running — refusing to open a second instance."
+        )
+        return
+    # Keep lock alive for the lifetime of the app
+    app._single_instance_lock = _lock
+
     app.setStyleSheet(_STYLE)
-    app.setQuitOnLastWindowClosed(False)
+    app.setQuitOnLastWindowClosed(True)   # quitting the window quits the app
 
     win  = ManagerWindow(service)
     win.show()
     win.raise_()
     win.activateWindow()
 
+    def _show_manager():
+        win.showNormal()
+        win.raise_()
+        win.activateWindow()
+
     tray  = QSystemTrayIcon(_make_icon())
     tray.setToolTip("DGX Desktop Remote Service")
     menu  = QMenu()
-    menu.addAction("Show Manager", win.show)
+    menu.addAction("Show Manager", _show_manager)
     menu.addSeparator()
     menu.addAction("Quit",         lambda: (service.stop(), app.quit()))
     tray.setContextMenu(menu)
     tray.activated.connect(
-        lambda r: win.show() if r == QSystemTrayIcon.ActivationReason.DoubleClick else None
+        lambda r: _show_manager() if r == QSystemTrayIcon.ActivationReason.DoubleClick else None
     )
     tray.show()
 
