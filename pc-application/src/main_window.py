@@ -623,6 +623,22 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(flags)
         self.show()
 
+    def showEvent(self, event):
+        """Connect screenChanged once the native window handle exists."""
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle and not getattr(self, "_screen_signal_connected", False):
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._screen_signal_connected = True
+
+    def _on_screen_changed(self, _screen):
+        """
+        Fired when the window is moved to a different monitor.
+        Force the canvas to re-scale immediately so the black bars
+        (if fullscreen) are recomputed for the new screen's geometry.
+        """
+        self.canvas._apply_scale()
+
     def _toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()

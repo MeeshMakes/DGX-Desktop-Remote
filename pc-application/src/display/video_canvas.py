@@ -76,17 +76,34 @@ class VideoCanvas(QLabel):
 
     def _apply_scale(self):
         """
-        Fill the widget with the last raw frame.
-        The widget geometry is already locked to the DGX aspect ratio
-        (enforced by hasHeightForWidth / MainWindow.resizeEvent), so we
-        stretch the frame to fill it completely — no letterbox bars,
-        no offset, and mouse coordinate mapping is always exact.
+        Scale the last raw frame to fit the widget.
+
+        Windowed mode:
+          The window is snapped to the DGX aspect ratio by MainWindow.resizeEvent,
+          so the widget and frame are already the same ratio — stretch to fill
+          with IgnoreAspectRatio.  No bars, perfect 1:1 mouse mapping.
+
+        Fullscreen mode:
+          The canvas fills whatever monitor we're on, which may be a different
+          aspect ratio (e.g. ultrawide 21:9 vs DGX 16:9).  We use
+          KeepAspectRatio so the frame is letterboxed/pillarboxed correctly:
+            • Wider monitor  → frame fits top-to-bottom, black bars on sides
+            • Taller monitor → frame fits left-to-right, black bars top/bottom
+          The QLabel background (#080810) provides the black bars.
+          _pixmap_w/_pixmap_h track the actual rendered size so coordinate
+          mapping (which subtracts the offset) stays exact.
         """
         if self._last_raw is None or self._last_raw.isNull():
             return
+        win = self.window()
+        fullscreen = win is not None and win.isFullScreen()
+        mode = (
+            Qt.AspectRatioMode.KeepAspectRatio
+            if fullscreen
+            else Qt.AspectRatioMode.IgnoreAspectRatio
+        )
         scaled = self._last_raw.scaled(
-            self.size(),
-            Qt.AspectRatioMode.IgnoreAspectRatio,    # widget IS the ratio
+            self.size(), mode,
             Qt.TransformationMode.FastTransformation
         )
         self._pixmap_w = scaled.width()
