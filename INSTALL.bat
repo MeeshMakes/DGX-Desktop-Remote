@@ -116,48 +116,33 @@ echo.
 echo  [92m  All packages installed successfully.[0m
 echo.
 
-:: ── Step 4 — Write LAUNCH.bat ─────────────────────────────────────────
-echo  [93m[4/4][0m  Creating launcher ...
+:: ── Step 5 — Desktop icon + LAUNCH.bat ───────────────────────────────
+echo  [93m[5/5][0m  Creating desktop icon ...
 
+set "VPYTHONW=%VENV%\Scripts\pythonw.exe"
+
+:: Write a silent LAUNCH.bat (fallback for advanced users)
 (
     echo @echo off
-    echo title DGX Desktop Remote
-    echo cd /d "%APP_SRC%"
-    echo "%VPYTHON%" main.py %%*
+    echo start "" "%VPYTHONW%" "%APP_SRC%\main.py"
 ) > "%ROOT%\LAUNCH.bat"
 
-echo  [92m  LAUNCH.bat created.[0m
-echo.
+:: Create the real .lnk with icon
+"%VENV%\Scripts\python.exe" "%ROOT%\create_shortcuts.py" --force
 
-:: ── Optional: desktop shortcut ────────────────────────────────────────
-echo  [97m  Create a desktop shortcut?  (Y/N)[0m
-set /p "SHORTCUT=  > "
-if /i "%SHORTCUT%"=="Y" (
-    "%VPYTHON%" "%ROOT%\create_shortcuts.py"
-    if %errorlevel%==0 (
-        echo  [92m  Desktop shortcut created.[0m
-    ) else (
-        echo  [93m  Shortcut skipped (pywin32 not installed — LAUNCH.bat works instead).[0m
-    )
+if %errorlevel%==0 (
+    echo  [92m  Desktop icon created with custom icon.[0m
+) else (
+    echo  [93m  .lnk creation failed — LAUNCH.bat placed on desktop as fallback.[0m
+    copy "%ROOT%\LAUNCH.bat" "%USERPROFILE%\Desktop\DGX Desktop Remote.bat" >nul
 )
-
-:: ── Done ──────────────────────────────────────────────────────────────
 echo.
-echo  [90m  ─────────────────────────────────────────────────────────────────────[0m
+echo  [90m  ───────────────────────────────────────────────────────────────────────[0m
 echo  [92m  ✓  Installation complete![0m
-echo  [90m  ─────────────────────────────────────────────────────────────────────[0m
+echo  [90m  ───────────────────────────────────────────────────────────────────────[0m
 echo.
-echo  [97m  To launch the app, double-click  LAUNCH.bat[0m
-echo  [97m  or run it from here:[0m
+echo  [97m  Double-click the  DGX Desktop Remote  icon on your desktop to launch.[0m
 echo.
-
-echo  [97m  Launch now?  (Y/N)[0m
-set /p "LAUNCH=  > "
-if /i "%LAUNCH%"=="Y" (
-    echo.
-    echo  [92m  Starting DGX Desktop Remote ...[0m
-    start "" "%ROOT%\LAUNCH.bat"
-)
 
 echo.
 pause

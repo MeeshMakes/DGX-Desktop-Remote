@@ -1,7 +1,16 @@
 """
 create_shortcuts.py
-Create a Windows desktop shortcut (.lnk) for DGX Desktop Remote.
-Also places a 'Run DGX Service' reminder on the DGX (SSH instructions).
+Create a polished Windows desktop shortcut (.lnk) for DGX Desktop Remote.
+
+Uses the project's own .venv pythonw.exe so:
+  • No console window when launched from the icon
+  • Fully self-contained — no system Python dependency after install
+  • Custom icon baked in from icons/app.ico
+
+Can be called:
+  • By INSTALL.bat after setup
+  • Automatically by main.py on first run
+  • Manually:  python create_shortcuts.py
 """
 
 import os
@@ -9,55 +18,65 @@ import sys
 from pathlib import Path
 
 
-def create_windows_shortcut():
-    """Create a .lnk shortcut on the Windows desktop using the pywin32 library."""
+ROOT = Path(__file__).parent.resolve()
+ICON = ROOT / "icons" / "app.ico"
+SCRIPT = ROOT / "pc-application" / "src" / "main.py"
+
+
+def _venv_pythonw() -> Path:
+    """Return the pythonw.exe inside the project .venv (no console window)."""
+    venv_pw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    if venv_pw.exists():
+        return venv_pw
+    # Fallback: same dir as current interpreter but pythonw
+    cur = Path(sys.executable)
+    pw = cur.parent / "pythonw.exe"
+    if pw.exists():
+        return pw
+    return cur   # last resort — regular python
+
+
+def create_desktop_shortcut(force: bool = False) -> bool:
+    """
+    Create / update the .lnk on the Windows desktop.
+    Returns True on success, False on failure.
+    """
+    desktop = Path(os.path.expanduser("~")) / "Desktop"
+    lnk_path = desktop / "DGX Desktop Remote.lnk"
+
+    if lnk_path.exists() and not force:
+        return True   # already there
+
     try:
         import win32com.client
     except ImportError:
-        _create_shortcut_fallback()
-        return
+        print("[shortcut] pywin32 not available — run: pip install pywin32")
+        return False
 
-    desktop = Path(os.path.expanduser("~")) / "Desktop"
-    shortcut_path = str(desktop / "DGX Desktop Remote.lnk")
+    pythonw = _venv_pythonw()
 
-    shell  = win32com.client.Dispatch("WScript.Shell")
-    lnk    = shell.CreateShortCut(shortcut_path)
+    shell = win32com.client.Dispatch("WScript.Shell")
+    lnk   = shell.CreateShortCut(str(lnk_path))
 
-    # Target: python main.py in pc-application/src/
-    script  = Path(__file__).parent / "pc-application" / "src" / "main.py"
-    python  = sys.executable
+    lnk.TargetPath       = str(pythonw)
+    lnk.Arguments        = f'"{SCRIPT}"'
+    lnk.WorkingDirectory = str(SCRIPT.parent)
+    lnk.Description      = "DGX Desktop Remote — Remote window into your DGX"
+    lnk.WindowStyle      = 1   # 1=Normal, 7=Minimised
 
-    lnk.Targetpath       = python
-    lnk.Arguments        = f'"{script}"'
-    lnk.WorkingDirectory = str(script.parent)
-    lnk.Description      = "Launch DGX Desktop Remote PC Client"
-
-    # Icon — use python.exe icon as fallback
-    icon_dir = Path(__file__).parent / "icons"
-    icon_ico = icon_dir / "app.ico"
-    if icon_ico.exists():
-        lnk.IconLocation = str(icon_ico)
+    if ICON.exists():
+        lnk.IconLocation = f"{ICON}, 0"
 
     lnk.save()
-    print(f"Shortcut created: {shortcut_path}")
-
-
-def _create_shortcut_fallback():
-    """Write a .bat launcher instead if pywin32 is unavailable."""
-    desktop = Path(os.path.expanduser("~")) / "Desktop"
-    bat     = desktop / "DGX Desktop Remote.bat"
-    script  = Path(__file__).parent / "pc-application" / "src" / "main.py"
-    content = (
-        f'@echo off\n'
-        f'cd /d "{script.parent}"\n'
-        f'"{sys.executable}" main.py\n'
-    )
-    bat.write_text(content)
-    print(f"Batch launcher created: {bat}")
+    print(f"[shortcut] Created: {lnk_path}")
+    return True
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        create_windows_shortcut()
-    else:
-        print("Shortcut creation is only supported on Windows from this script.")
+    if sys.platform != "win32":
+        print("Desktop shortcut creation is Windows-only.")
+        sys.exit(0)
+
+    force = "--force" in sys.argv or "-f" in sys.argv
+    ok = create_desktop_shortcut(force=force)
+    sys.exit(0 if ok else 1)

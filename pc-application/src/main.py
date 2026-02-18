@@ -63,6 +63,18 @@ def main():
     win.tray = tray          # back-reference so window can notify tray
     tray.show()
 
+    # Auto-create desktop .lnk icon on first run (silent — won't overwrite)
+    if sys.platform == "win32":
+        try:
+            import subprocess, pathlib
+            root = pathlib.Path(__file__).parents[3]
+            subprocess.Popen(
+                [sys.executable, str(root / "create_shortcuts.py")],
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+        except Exception:
+            pass
+
     if config.start_minimized:
         win.hide()
     else:
