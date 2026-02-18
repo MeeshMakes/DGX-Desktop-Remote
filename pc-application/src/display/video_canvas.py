@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import QLabel, QSizePolicy
 from PyQt6.QtCore import Qt, QPoint, QSize, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QKeyEvent
+from PyQt6.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QKeyEvent, QCursor
 
 from display.coordinate_mapper import CoordinateMapper
 
@@ -39,6 +39,7 @@ class VideoCanvas(QLabel):
 
         self.connection:  Optional[object] = None   # DGXConnection
         self.mapper:      Optional[CoordinateMapper] = None
+        self.cursor_mode: str   = "bridge"  # "bridge" | "hidden" | "arrow"
         self._in_tunnel:  bool  = False
         self._pixmap_w:   int   = 0
         self._pixmap_h:   int   = 0
@@ -89,7 +90,13 @@ class VideoCanvas(QLabel):
 
     def enterEvent(self, event):
         self._in_tunnel = True
-        self.setCursor(Qt.CursorShape.BlankCursor)
+        if self.cursor_mode == "bridge":
+            # Start with arrow; DGX will push the real shape immediately
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        elif self.cursor_mode == "hidden":
+            self.setCursor(Qt.CursorShape.BlankCursor)
+        else:  # "arrow"
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFocus()
         super().enterEvent(event)
 
@@ -97,6 +104,54 @@ class VideoCanvas(QLabel):
         self._in_tunnel = False
         self.unsetCursor()
         super().leaveEvent(event)
+
+    # ------------------------------------------------------------------
+    # Cursor bridging
+    # ------------------------------------------------------------------
+
+    def set_cursor_shape(self, x11_name: str):
+        """Called from main thread when DGX pushes a cursor_shape event."""
+        if self.cursor_mode != "bridge":
+            return
+        # Map X11 cursor names to Qt shapes
+        _MAP = {
+            "default":          Qt.CursorShape.ArrowCursor,
+            "arrow":            Qt.CursorShape.ArrowCursor,
+            "left_ptr":         Qt.CursorShape.ArrowCursor,
+            "text":             Qt.CursorShape.IBeamCursor,
+            "xterm":            Qt.CursorShape.IBeamCursor,
+            "ibeam":            Qt.CursorShape.IBeamCursor,
+            "wait":             Qt.CursorShape.WaitCursor,
+            "watch":            Qt.CursorShape.WaitCursor,
+            "crosshair":        Qt.CursorShape.CrossCursor,
+            "cross":            Qt.CursorShape.CrossCursor,
+            "pointer":          Qt.CursorShape.PointingHandCursor,
+            "hand":             Qt.CursorShape.PointingHandCursor,
+            "hand1":            Qt.CursorShape.PointingHandCursor,
+            "hand2":            Qt.CursorShape.PointingHandCursor,
+            "size_all":         Qt.CursorShape.SizeAllCursor,
+            "fleur":            Qt.CursorShape.SizeAllCursor,
+            "size_ver":         Qt.CursorShape.SizeVerCursor,
+            "sb_v_double_arrow":Qt.CursorShape.SizeVerCursor,
+            "size_hor":         Qt.CursorShape.SizeHorCursor,
+            "sb_h_double_arrow":Qt.CursorShape.SizeHorCursor,
+            "size_bdiag":       Qt.CursorShape.SizeBDiagCursor,
+            "size_fdiag":       Qt.CursorShape.SizeFDiagCursor,
+            "not-allowed":      Qt.CursorShape.ForbiddenCursor,
+            "forbidden":        Qt.CursorShape.ForbiddenCursor,
+            "x_cursor":         Qt.CursorShape.ForbiddenCursor,
+            "split_v":          Qt.CursorShape.SplitVCursor,
+            "split_h":          Qt.CursorShape.SplitHCursor,
+            "open_hand":        Qt.CursorShape.OpenHandCursor,
+            "grabbing":         Qt.CursorShape.ClosedHandCursor,
+            "closedhand":       Qt.CursorShape.ClosedHandCursor,
+            "whats_this":       Qt.CursorShape.WhatsThisCursor,
+            "help":             Qt.CursorShape.WhatsThisCursor,
+            "progress":         Qt.CursorShape.BusyCursor,
+            "left_ptr_watch":   Qt.CursorShape.BusyCursor,
+        }
+        shape = _MAP.get(x11_name.lower(), Qt.CursorShape.ArrowCursor)
+        self.setCursor(shape)
 
     def mouseMoveEvent(self, event):
         if self._connected():

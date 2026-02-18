@@ -34,7 +34,8 @@ class DGXConnection:
     def __init__(self,
                  on_frame:      Optional[Callable[[bytes], None]] = None,
                  on_disconnect: Optional[Callable]                = None,
-                 on_ping_update: Optional[Callable[[float], None]] = None):
+                 on_ping_update: Optional[Callable[[float], None]] = None,
+                 on_cursor: Optional[Callable[[str], None]] = None):
         self._rpc_sock:   Optional[socket.socket] = None
         self._video_sock: Optional[socket.socket] = None
         self._input_sock: Optional[socket.socket] = None
@@ -45,6 +46,7 @@ class DGXConnection:
         self._on_frame       = on_frame
         self._on_disconnect  = on_disconnect
         self._on_ping_update = on_ping_update
+        self._on_cursor      = on_cursor
 
         # Stats
         self.ping_ms:     float = 0.0
@@ -322,16 +324,49 @@ class DGXConnection:
 
     def _rpc_push_loop(self):
         """
-        Listens for unsolicited push messages from DGX on the RPC socket
-        (e.g. resolution_changed). Runs between RPC calls.
-        Cannot interfere with rpc() because the lock is not held here by default;
-        push listening is done on a separate read pass when no RPC is in flight.
-        NOTE: In prod use, split into dedicated push channel. For now we rely on
-        the DGX service sending pushes only between RPC calls.
+        Listens for unsolicited push messages from DGX on a dedicated
+        push socket (same RPC socket, but reads only when the rpc_lock
+        is not held).  Handles: cursor_shape, resolution_changed.
+        We use a separate socket-level read with a short select loop so
+        we don’t block rpc().
         """
-        # Currently resolution change events are handled by the rpc() caller
-        # by checking message type. Future: dedicated push port.
-        pass
+        import select, json
+        # We need our own socket handle for pushes to avoid contention
+        # with the request/response rpc() method.  The simplest safe
+        # approach: use a non-blocking peek loop with select.
+        while self._connected and self._rpc_sock:
+            try:
+                # Wait up to 0.5s for data without holding the lock
+                ready, _, _ = select.select([self._rpc_sock], [], [], 0.5)
+                if not ready:
+                    continue
+                # Only read if no RPC call is in flight
+                if self._rpc_lock.acquire(blocking=False):
+                    try:
+                        self._rpc_sock.settimeout(0.1)
+                        raw = recv_line(self._rpc_sock)
+                        if not raw:
+                            continue
+                        msg = json.loads(raw)
+                    except Exception:
+                        continue
+                    finally:
+                        if self._rpc_sock:
+                            self._rpc_sock.settimeout(None)
+                        self._rpc_lock.release()
+
+                    t = msg.get("type", "")
+                    if t == "cursor_shape" and self._on_cursor:
+                        self._on_cursor(msg.get("shape", "arrow"))
+                    elif t == "resolution_changed":
+                        log.info("DGX resolution changed: %s", msg)
+                    elif t == "pong":
+                        pass  # swallow stale pongs
+                    else:
+                        log.debug("Unhandled push: %s", t)
+            except Exception as e:
+                log.debug("RPC push loop error: %s", e)
+                break
 
     def _ping_loop(self):
         """Send a ping every 2 seconds, update ping_ms."""

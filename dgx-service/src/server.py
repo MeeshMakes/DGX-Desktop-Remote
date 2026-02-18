@@ -124,7 +124,10 @@ class ClientSession:
     def run(self):
         """Block on RPC control channel until client disconnects."""
         self._running = True
+        self._last_cursor_shape = ""
         self._svc.capture.start(self._on_frame)
+        # Start cursor push thread
+        threading.Thread(target=self._cursor_push_loop, daemon=True).start()
         try:
             while self._running:
                 line = _recv_line(self._rpc_conn)
@@ -151,6 +154,62 @@ class ClientSession:
             log.info("Client disconnected: %s", e)
         finally:
             self._cleanup()
+
+    def _cursor_push_loop(self):
+        """
+        Polls the X11 cursor shape every 150ms and pushes a cursor_shape
+        message to the PC when it changes.  Uses python-xlib if available,
+        falls back to xdotool subprocess.
+        Push messages are sent on the RPC socket between request/response
+        pairs — they are NOT responses to a request, so we use _rpc_push_lock.
+        """
+        self._rpc_push_lock = threading.Lock()
+
+        def _get_cursor_name() -> str:
+            """Return an X11 cursor name string, e.g. 'text', 'pointer', 'default'."""
+            # Try Xlib first (zero-fork, fast)
+            try:
+                from Xlib import display as _xdisplay, X as _X, Xutil
+                from Xlib.ext import xfixes
+                dpy = _xdisplay.Display()
+                if dpy.has_extension("XFIXES"):
+                    ci = dpy.xfixes_get_cursor_image(dpy.screen().root)
+                    # cursor_image has a .name field on newer python-xlib
+                    name = getattr(ci, "name", "") or ""
+                    dpy.close()
+                    return name.lower() or "default"
+                dpy.close()
+            except Exception:
+                pass
+            # Fall back to parsing xprop / xdotool
+            try:
+                out = __import__("subprocess").check_output(
+                    ["xdotool", "getmouselocation", "--shell"],
+                    timeout=0.2, stderr=__import__("subprocess").DEVNULL
+                ).decode()
+                # xdotool doesn't give cursor name directly; skip
+            except Exception:
+                pass
+            return "default"
+
+        while self._running and self._rpc_conn:
+            try:
+                shape = _get_cursor_name()
+                if shape and shape != self._last_cursor_shape:
+                    self._last_cursor_shape = shape
+                    msg = (
+                        __import__("json").dumps(
+                            {"type": "cursor_shape", "shape": shape}
+                        ) + "\n"
+                    ).encode()
+                    with self._rpc_push_lock:
+                        try:
+                            self._rpc_conn.sendall(msg)
+                        except OSError:
+                            break
+            except Exception as e:
+                log.debug("Cursor push error: %s", e)
+            time.sleep(0.15)
 
     def _cleanup(self):
         self._running = False

@@ -42,6 +42,7 @@ class Config:
     show_fps:         bool = True
     show_ping:        bool = True
     confirm_file_del: bool = True
+    cursor_mode:      str  = "bridge"   # "bridge" | "hidden" | "arrow"
 
     # Auto-reconnect watchdog
     auto_reconnect:       bool = True   # keep trying even after connection drop

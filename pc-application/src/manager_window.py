@@ -229,6 +229,19 @@ class ManagerWindow(QDialog):
         self._cb_confirm_del = QCheckBox("Confirm before deleting remote files")
         l.addWidget(self._cb_confirm_del)
 
+        l.addWidget(SectionTitle("Cursor"))
+        cursor_note = QLabel(
+            "Bridge: mirrors the real DGX cursor shape inside the canvas.\n"
+            "Hidden: hides the cursor while inside the canvas.\n"
+            "Arrow: always show a plain arrow inside the canvas."
+        )
+        cursor_note.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        cursor_note.setWordWrap(True)
+        l.addWidget(cursor_note)
+        self._f_cursor = QComboBox()
+        self._f_cursor.addItems(["Bridge (mirror DGX cursor)", "Hidden", "Arrow"])
+        l.addWidget(self._f_cursor)
+
         l.addStretch()
         return w
 
@@ -336,6 +349,8 @@ class ManagerWindow(QDialog):
         self._cb_fps.setChecked(c.show_fps)
         self._cb_ping.setChecked(c.show_ping)
         self._cb_confirm_del.setChecked(c.confirm_file_del)
+        cursor_map = {"bridge": 0, "hidden": 1, "arrow": 2}
+        self._f_cursor.setCurrentIndex(cursor_map.get(c.cursor_mode, 0))
 
     def _save(self):
         c = self.config
@@ -356,6 +371,8 @@ class ManagerWindow(QDialog):
         c.show_fps        = self._cb_fps.isChecked()
         c.show_ping       = self._cb_ping.isChecked()
         c.confirm_file_del= self._cb_confirm_del.isChecked()
+        cursor_modes = ["bridge", "hidden", "arrow"]
+        c.cursor_mode = cursor_modes[self._f_cursor.currentIndex()]
         c.save()
 
         if old_mode != c.display_mode:

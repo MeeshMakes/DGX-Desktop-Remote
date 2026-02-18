@@ -38,6 +38,10 @@ def main():
     app.setOrganizationName("FathomPC")
     app.setStyleSheet(APP_STYLESHEET)
 
+    # Install global crash handler — must come before any other initialisation
+    from crash_catcher import install_crash_handler
+    install_crash_handler(app)
+
     # Default font
     font = QFont("Segoe UI", 9)
     app.setFont(font)

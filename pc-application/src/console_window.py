@@ -83,6 +83,9 @@ class ConsoleWindow(QDialog):
     .attach() after creation to start capturing logs.
     """
 
+    # Emits the worst log level seen so far: "DEBUG"|"INFO"|"WARNING"|"ERROR"|"CRITICAL"
+    severity_changed = pyqtSignal(str)
+
     def __init__(self, parent=None, title: str = "Console"):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle(f"🖥  {title}")
@@ -91,6 +94,7 @@ class ConsoleWindow(QDialog):
         self._min_level = logging.DEBUG
         self._auto_scroll = True
         self._records: list[tuple[str, str, str]] = []   # for filtering
+        self._worst_level = "INFO"  # track worst level for dot signal
 
         self._bridge = _LogBridge()
         self._handler = _QtLogHandler(self._bridge)
@@ -241,8 +245,14 @@ class ConsoleWindow(QDialog):
         )
         if errors:
             self._lbl_status.setStyleSheet(f"color: {_COL['ERROR']}; font-size: 11px;")
+            if self._worst_level not in ("ERROR", "CRITICAL"):
+                self._worst_level = "ERROR"
+                self.severity_changed.emit("ERROR")
         elif warns:
             self._lbl_status.setStyleSheet(f"color: {_COL['WARNING']}; font-size: 11px;")
+            if self._worst_level not in ("ERROR", "CRITICAL", "WARNING"):
+                self._worst_level = "WARNING"
+                self.severity_changed.emit("WARNING")
 
     def _on_level_change(self, level_name: str):
         self._min_level = getattr(logging, level_name, logging.DEBUG)
@@ -262,6 +272,7 @@ class ConsoleWindow(QDialog):
     def _clear(self):
         self._view.clear()
         self._records.clear()
+        self._worst_level = "INFO"
         self._lbl_status.setText("Cleared")
 
     # ── Stylesheet ────────────────────────────────────────────────────

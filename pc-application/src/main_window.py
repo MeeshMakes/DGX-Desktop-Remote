@@ -122,8 +122,9 @@ class _NegotiateConnectWorker(QThread):
 
 class MainWindow(QMainWindow):
 
-    # Signal used to safely marshal disconnect callback from network thread → GUI thread
+    # Signals to safely marshal callbacks from network threads → GUI thread
     _disconnect_signal = pyqtSignal()
+    _cursor_signal     = pyqtSignal(str)
 
     def __init__(self, config: Config):
         super().__init__()
@@ -145,10 +146,12 @@ class MainWindow(QMainWindow):
 
         # Wire disconnect signal → slot (always runs on main/GUI thread)
         self._disconnect_signal.connect(self._on_disconnect_ui)
+        self._cursor_signal.connect(self._on_cursor_slot)
 
         # Console window (singleton, lazy-shown)
         self.console = ConsoleWindow(self, title="DGX Remote — Console")
         self.console.attach()   # captures all loggers
+        self.console.severity_changed.connect(self._on_console_severity)
 
         self._build_ui()
         self._restore_geometry()
@@ -204,9 +207,6 @@ class MainWindow(QMainWindow):
         self._sidebar_container.setVisible(False)
         self._central_layout.addWidget(self._sidebar_container)
         self._sidebar_built = False
-
-        # ── Overlay info (FPS / Ping) over canvas ────────────────────
-        self._build_canvas_overlay()
 
         # ── Stats update timer ────────────────────────────────────────
         self._stats_timer = QTimer(self)
@@ -267,6 +267,16 @@ class MainWindow(QMainWindow):
         spacer.setStyleSheet("background: transparent;")
         h.addWidget(spacer)
 
+        # Status dot — colored circle button
+        self._dot = QPushButton()
+        self._dot.setFixedSize(12, 12)
+        self._dot.setToolTip("Connection status")
+        self._dot.clicked.connect(self._open_console)
+        self._dot.setStyleSheet(self._dot_style("#404060"))  # idle/unknown
+        h.addWidget(self._dot)
+
+        h.addSpacing(4)
+
         # Status pill (text: ● Connected / ○ Disconnected)
         self._lbl_status = QLabel("○ Disconnected")
         self._lbl_status.setStyleSheet(
@@ -324,23 +334,6 @@ class MainWindow(QMainWindow):
 
         parent_layout.addWidget(bar)
 
-    def _build_canvas_overlay(self):
-        """
-        Semi-transparent info overlay in the top-right corner of the canvas.
-        Visible only when config.show_fps is True and connected.
-        """
-        self._overlay = QWidget(self.canvas)
-        self._overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        ol = QHBoxLayout(self._overlay)
-        ol.setContentsMargins(6, 6, 6, 6)
-        ol.setSpacing(4)
-        self._ol_fps  = _overlay_lbl("0 fps")
-        self._ol_ping = _overlay_lbl("0 ms")
-        ol.addWidget(self._ol_fps)
-        ol.addWidget(self._ol_ping)
-        self._overlay.adjustSize()
-        self._overlay.setVisible(False)
-
     # ------------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------------
@@ -369,7 +362,8 @@ class MainWindow(QMainWindow):
         self.conn = DGXConnection(
             on_frame       = self.canvas.update_frame,
             on_disconnect  = self._on_disconnect_signal,
-            on_ping_update = self._on_ping_update
+            on_ping_update = self._on_ping_update,
+            on_cursor      = self._on_cursor_shape
         )
 
         # Use negotiate-then-connect worker so ports are always fresh
@@ -396,6 +390,7 @@ class MainWindow(QMainWindow):
         self.mapper = CoordinateMapper(dgx_w=w, dgx_h=h)
         self.canvas.connection = self.conn
         self.canvas.mapper     = self.mapper
+        self.canvas.cursor_mode = self.config.cursor_mode
 
         # Reset backoff on success
         self._watchdog_fail_count = 0
@@ -408,7 +403,6 @@ class MainWindow(QMainWindow):
         self._set_status("connected")
         host = info.get("hostname", "DGX")
         self._lbl_host.setText(f"{host}  {w}×{h}@{hz}Hz")
-        self._overlay.setVisible(self.config.show_fps)
 
         # Notify tray
         if hasattr(self, "tray"):
@@ -463,7 +457,6 @@ class MainWindow(QMainWindow):
         self._lbl_fps.setText("—")
         self._lbl_ping.setText("")
         self._lbl_bytes.setText("")
-        self._overlay.setVisible(False)
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(False)
@@ -475,15 +468,40 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, state: str):
         _STATES = {
-            "connected":    (f"● Connected",    SUCCESS),
-            "connecting":   (f"◌ Connecting…",  WARNING),
-            "disconnected": (f"○ Disconnected",  TEXT_DIM),
-            "error":        (f"✕ Error",         ERROR),
+            "connected":    (f"● Connected",    "#22D47E"),   # green
+            "connecting":   (f"◌ Connecting…",  "#F5A623"),   # yellow
+            "disconnected": (f"○ Disconnected",  "#7070A0"),   # dim
+            "error":        (f"✕ Error",         "#FF4F5E"),   # red
+            "idle":         (f"● Idle",           "#3A8EFF"),   # blue
         }
-        text, color = _STATES.get(state, ("○ Disconnected", TEXT_DIM))
+        text, color = _STATES.get(state, ("○ Disconnected", "#7070A0"))
         self._lbl_status.setText(text)
         self._lbl_status.setStyleSheet(
             f"color: {color}; font-size: 11px; padding: 0 6px; background: transparent;"
+        )
+        # Drive the dot color
+        _dot_colors = {
+            "connected":    "#22D47E",   # green
+            "connecting":   "#F5A623",   # yellow
+            "disconnected": "#404060",   # dark grey
+            "error":        "#FF4F5E",   # red
+            "idle":         "#3A8EFF",   # blue
+        }
+        self._dot.setStyleSheet(self._dot_style(_dot_colors.get(state, "#404060")))
+        self._dot.setToolTip(text)
+
+    @staticmethod
+    def _dot_style(color: str) -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: {color};"
+            f"  border-radius: 6px;"
+            f"  border: none;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: {color}cc;"
+            f"  border: 1px solid {color};"
+            f"}}"
         )
 
     # ------------------------------------------------------------------
@@ -515,9 +533,13 @@ class MainWindow(QMainWindow):
         self._lbl_fps.setText(fps_str)
         self._lbl_ping.setText(ping_str)
 
-        if self.config.show_fps:
-            self._ol_fps.setText(f"  {fps_str}  ")
-            self._ol_ping.setText(f"  {ping_str}  ")
+        # Dot: green when streaming, blue when connected but idle (0 fps)
+        if fps > 0:
+            self._dot.setStyleSheet(self._dot_style("#22D47E"))
+            self._dot.setToolTip("● Streaming")
+        else:
+            self._dot.setStyleSheet(self._dot_style("#3A8EFF"))
+            self._dot.setToolTip("● Connected — idle")
 
         mb = self.conn.bytes_recv / 1_048_576
         if mb > 1024:
@@ -527,6 +549,29 @@ class MainWindow(QMainWindow):
 
     def _on_ping_update(self, ping_ms: float):
         pass   # Handled by _update_stats timer
+
+    def _on_cursor_shape(self, shape: str):
+        """Called from network thread — marshal to GUI thread."""
+        if not self._closing:
+            self._cursor_signal.emit(shape)
+
+    @pyqtSlot(str)
+    def _on_cursor_slot(self, shape: str):
+        """Runs on GUI thread — update canvas cursor."""
+        if hasattr(self, "canvas"):
+            self.canvas.set_cursor_shape(shape)
+
+    @pyqtSlot(str)
+    def _on_console_severity(self, level: str):
+        """Drive the dot yellow/red from log severity — only when not actively connected."""
+        if self.conn and self.conn.connected:
+            return   # connection state owns the dot color when connected
+        if level in ("ERROR", "CRITICAL"):
+            self._dot.setStyleSheet(self._dot_style("#FF4F5E"))
+            self._dot.setToolTip("Error — click to open console")
+        elif level == "WARNING":
+            self._dot.setStyleSheet(self._dot_style("#F5A623"))
+            self._dot.setToolTip("Warning — click to open console")
 
     # ------------------------------------------------------------------
     # Keyboard forwarding (captures from main window, routes to canvas)
@@ -626,13 +671,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Overlay positioning on resize
     # ------------------------------------------------------------------
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._overlay.adjustSize()
-        self._overlay.move(
-            self.canvas.width() - self._overlay.width() - 8, 8
-        )
 
     # ------------------------------------------------------------------
     # Geometry persistence
