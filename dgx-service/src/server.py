@@ -125,6 +125,39 @@ class ClientSession:
         """Block on RPC control channel until client disconnects."""
         self._running = True
         self._last_cursor_shape = ""
+
+        # ── Hello handshake ──────────────────────────────────────────
+        # PC sends {"type": "hello", ...} immediately after connecting.
+        # We must respond before entering the main loop.
+        try:
+            hello_line = _recv_line(self._rpc_conn)
+            hello = json.loads(hello_line) if hello_line else {}
+        except Exception as e:
+            log.warning("Handshake recv failed: %s", e)
+            self._cleanup()
+            return
+
+        if hello.get("type") != "hello":
+            log.warning("Expected hello, got: %s", hello.get("type"))
+            _send_json(self._rpc_conn, {"ok": False, "error": "expected hello"})
+            self._cleanup()
+            return
+
+        _res = self._svc.resolution_monitor.current
+        res = _res if (_res and _res[0] > 0) else (1920, 1080)
+        _send_json(self._rpc_conn, {
+            "ok":      True,
+            "type":    "hello",
+            "agent":   "DGX",
+            "version": "1.0",
+            "width":   res[0],
+            "height":  res[1],
+            "fps":     self._svc.capture.fps,
+            "hostname": __import__("socket").gethostname(),
+        })
+        log.info("Handshake complete with PC (agent=%s)", hello.get("agent", "?"))
+        # ─────────────────────────────────────────────────────────────
+
         self._svc.capture.start(self._on_frame)
         # Start cursor push thread
         threading.Thread(target=self._cursor_push_loop, daemon=True).start()
