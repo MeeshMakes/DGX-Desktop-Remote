@@ -87,6 +87,7 @@ class ClientSession:
         self._inp_conn: Optional[socket.socket] = None
         self._running   = False
         self._lock      = threading.Lock()
+        self._rpc_push_lock = threading.Lock()  # guards all writes to _rpc_conn
 
     def set_video_conn(self, conn: socket.socket):
         """Accept the video channel socket and drain the start_stream handshake."""
@@ -143,18 +144,10 @@ class ClientSession:
             self._cleanup()
             return
 
-        _res = self._svc.resolution_monitor.current
-        res = _res if (_res and _res[0] > 0) else (1920, 1080)
-        _send_json(self._rpc_conn, {
-            "ok":      True,
-            "type":    "hello",
-            "agent":   "DGX",
-            "version": "1.0",
-            "width":   res[0],
-            "height":  res[1],
-            "fps":     self._svc.capture.fps,
-            "hostname": __import__("socket").gethostname(),
-        })
+        # Delegate to rpc_handler so the response includes the full
+        # 'display' sub-dict, gpus, disk_free_gb, etc. that the PC expects.
+        hello_resp = self._svc.rpc.handle_hello(hello)
+        _send_json(self._rpc_conn, hello_resp)
         log.info("Handshake complete with PC (agent=%s)", hello.get("agent", "?"))
         # ─────────────────────────────────────────────────────────────
 
@@ -182,7 +175,8 @@ class ClientSession:
                 else:
                     resp = self._svc.rpc.dispatch(msg)
 
-                _send_json(self._rpc_conn, resp)
+                with self._rpc_push_lock:
+                    _send_json(self._rpc_conn, resp)
         except (ConnectionResetError, BrokenPipeError, OSError) as e:
             log.info("Client disconnected: %s", e)
         finally:
@@ -196,7 +190,6 @@ class ClientSession:
         Push messages are sent on the RPC socket between request/response
         pairs — they are NOT responses to a request, so we use _rpc_push_lock.
         """
-        self._rpc_push_lock = threading.Lock()
 
         def _get_cursor_name() -> str:
             """Return an X11 cursor name string, e.g. 'text', 'pointer', 'default'."""
