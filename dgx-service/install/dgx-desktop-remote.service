@@ -1,0 +1,21 @@
+[Unit]
+Description=DGX Desktop Remote Service
+After=network.target graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/dgx_service.py --no-gui
+WorkingDirectory=__INSTALL_DIR__
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Allow X/display access if ever run with GUI
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/__SERVICE_USER__/.Xauthority
+
+[Install]
+WantedBy=multi-user.target

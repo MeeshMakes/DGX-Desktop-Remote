@@ -1,0 +1,33 @@
+# .gitignore — DGX Desktop Remote
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Config (contains IPs — never commit)
+.dgx-desktop-remote/
+config.json
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
