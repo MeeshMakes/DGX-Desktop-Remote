@@ -281,25 +281,38 @@ class DGXConnection:
     # ------------------------------------------------------------------
 
     def _video_loop(self):
-        """Continuously read JPEG frames and call on_frame callback."""
+        """Continuously read JPEG frames and call on_frame callback.
+        Wire format: 4-byte big-endian length (uint32) followed by JPEG bytes.
+        """
+        import struct
         _fps_times = []
         while self._connected and self._video_sock:
             try:
-                raw    = recv_line(self._video_sock)
-                header = json.loads(raw)
-                if header.get("type") != "frame":
+                # Read 4-byte length header
+                header_bytes = b""
+                while len(header_bytes) < 4:
+                    chunk = self._video_sock.recv(4 - len(header_bytes))
+                    if not chunk:
+                        raise ConnectionResetError("Video socket closed")
+                    header_bytes += chunk
+
+                size = struct.unpack(">I", header_bytes)[0]
+                if size == 0 or size > 20_000_000:   # sanity: 0 or >20 MB
                     continue
-                size = int(header["size"])
+
+                # Read exactly `size` bytes of JPEG
                 data = recv_exact(self._video_sock, size)
                 self.bytes_recv += size
+
                 # FPS tracking (1-second window)
                 now = time.monotonic()
                 _fps_times.append(now)
                 _fps_times = [t for t in _fps_times if now - t <= 1.0]
                 self.fps_actual = len(_fps_times)
+
                 if self._on_frame:
                     self._on_frame(data)
-            except (ConnectionError, OSError, ValueError):
+            except (ConnectionError, OSError, struct.error):
                 break
             except Exception as e:
                 log.debug(f"Video loop error: {e}")

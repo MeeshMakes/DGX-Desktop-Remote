@@ -9,7 +9,7 @@ from collections import deque
 from typing import Optional
 
 from PyQt6.QtWidgets import QLabel, QSizePolicy
-from PyQt6.QtCore import Qt, QPoint, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QSize, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QKeyEvent
 
 from display.coordinate_mapper import CoordinateMapper
@@ -25,6 +25,7 @@ class VideoCanvas(QLabel):
     """
 
     files_dropped = pyqtSignal(list)   # list[str] — file paths
+    _frame_ready = pyqtSignal(QPixmap)    # internal cross-thread signal
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,6 +44,7 @@ class VideoCanvas(QLabel):
         self._pixmap_h:   int   = 0
         self.fps_actual:  float = 0.0
         self._fps_times:  deque = deque(maxlen=120)
+        self._frame_ready.connect(self._set_pixmap)  # queued across threads
 
     # ------------------------------------------------------------------
     # Frame update (called from network thread via queued invoke)
@@ -68,14 +70,9 @@ class VideoCanvas(QLabel):
         )
         self._pixmap_w = pixmap.width()
         self._pixmap_h = pixmap.height()
-        # Cross-thread UI update via invokeMethod
-        from PyQt6.QtCore import QMetaObject, Q_ARG
-        QMetaObject.invokeMethod(
-            self, "_set_pixmap",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(QPixmap, pixmap)
-        )
+        self._frame_ready.emit(pixmap)
 
+    @pyqtSlot(QPixmap)
     def _set_pixmap(self, pixmap: QPixmap):
         self.setPixmap(pixmap)
 
