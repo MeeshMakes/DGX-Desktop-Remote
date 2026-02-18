@@ -237,6 +237,9 @@ def run_manager_gui(service):
     app.setQuitOnLastWindowClosed(False)
 
     win  = ManagerWindow(service)
+    win.show()
+    win.raise_()
+    win.activateWindow()
 
     tray  = QSystemTrayIcon(_make_icon())
     tray.setToolTip("DGX Desktop Remote Service")
