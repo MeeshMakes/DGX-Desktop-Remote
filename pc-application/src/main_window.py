@@ -334,10 +334,7 @@ class MainWindow(QMainWindow):
         h.addWidget(self._btn_menu)
 
         parent_layout.addWidget(bar)
-
-    # ------------------------------------------------------------------
-    # Connection
-    # ------------------------------------------------------------------
+        self._header_bar = bar
 
     def _toggle_connection(self):
         if self.conn and self.conn.connected:
@@ -588,8 +585,10 @@ class MainWindow(QMainWindow):
             return
         # Escape — exit fullscreen
         if event.key() == Qt.Key.Key_Escape and self.isFullScreen():
+            self._header_bar.setVisible(True)
             self.showNormal()
             self._btn_fullscreen.setChecked(False)
+            QTimer.singleShot(0, self.canvas._apply_scale)
             return
 
         if self.conn and self.conn.connected:
@@ -641,11 +640,15 @@ class MainWindow(QMainWindow):
 
     def _toggle_fullscreen(self):
         if self.isFullScreen():
+            self._header_bar.setVisible(True)
             self.showNormal()
             self._btn_fullscreen.setChecked(False)
         else:
+            self._header_bar.setVisible(False)
             self.showFullScreen()
             self._btn_fullscreen.setChecked(True)
+        # Re-scale with correct mode (IgnoreAspectRatio vs KeepAspectRatio)
+        QTimer.singleShot(0, self.canvas._apply_scale)
 
     def _toggle_sidebar(self, visible: bool):
         if visible and not self._sidebar_built:
