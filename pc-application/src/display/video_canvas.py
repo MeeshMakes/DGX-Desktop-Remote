@@ -43,6 +43,7 @@ class VideoCanvas(QLabel):
         self._in_tunnel:  bool  = False
         self._pixmap_w:   int   = 0
         self._pixmap_h:   int   = 0
+        self._last_raw:   Optional[QPixmap] = None   # last unscaled frame
         self.fps_actual:  float = 0.0
         self._fps_times:  deque = deque(maxlen=120)
         self._frame_ready.connect(self._set_pixmap)  # queued across threads
@@ -52,7 +53,7 @@ class VideoCanvas(QLabel):
     # ------------------------------------------------------------------
 
     def update_frame(self, jpeg_data: bytes):
-        """Called from VideoReceiver thread. Thread-safe via QueuedConnection."""
+        """Called from network thread. Decodes JPEG and emits raw pixmap to GUI thread."""
         img = QImage.fromData(jpeg_data, "JPEG")
         if img.isNull():
             return
@@ -64,23 +65,33 @@ class VideoCanvas(QLabel):
             self._fps_times.popleft()
         self.fps_actual = len(self._fps_times)
 
-        pixmap = QPixmap.fromImage(img).scaled(
+        # Emit raw (unscaled) pixmap — scaling happens on the GUI thread in _set_pixmap
+        self._frame_ready.emit(QPixmap.fromImage(img))
+
+    @pyqtSlot(QPixmap)
+    def _set_pixmap(self, pixmap: QPixmap):
+        """GUI thread: scale the raw frame to current canvas size, preserving DGX aspect ratio."""
+        self._last_raw = pixmap
+        self._apply_scale()
+
+    def _apply_scale(self):
+        """Scale _last_raw to current widget size and display it."""
+        if self._last_raw is None or self._last_raw.isNull():
+            return
+        scaled = self._last_raw.scaled(
             self.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation
         )
-        self._pixmap_w = pixmap.width()
-        self._pixmap_h = pixmap.height()
-        self._frame_ready.emit(pixmap)
-
-    @pyqtSlot(QPixmap)
-    def _set_pixmap(self, pixmap: QPixmap):
-        self.setPixmap(pixmap)
+        self._pixmap_w = scaled.width()
+        self._pixmap_h = scaled.height()
+        self.setPixmap(scaled)
 
     def clear_frame(self):
         self.setPixmap(QPixmap())
-        self._pixmap_w = 0
-        self._pixmap_h = 0
+        self._last_raw  = None
+        self._pixmap_w  = 0
+        self._pixmap_h  = 0
         self.fps_actual = 0.0
         self._fps_times.clear()
 
@@ -104,6 +115,11 @@ class VideoCanvas(QLabel):
         self._in_tunnel = False
         self.unsetCursor()
         super().leaveEvent(event)
+
+    def resizeEvent(self, event):
+        """Re-scale the last received frame whenever the canvas is resized."""
+        super().resizeEvent(event)
+        self._apply_scale()
 
     # ------------------------------------------------------------------
     # Cursor bridging
