@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QToolBar, QStatusBar, QLabel, QPushButton,
     QSizePolicy, QSplitter, QApplication, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, QMutex
+from PyQt6.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, pyqtSlot, QMutex
 from PyQt6.QtGui import QIcon, QKeyEvent, QFont, QAction
 
 from config import Config
@@ -23,6 +23,7 @@ from display.video_canvas import VideoCanvas
 from display.coordinate_mapper import CoordinateMapper
 from network.connection import DGXConnection
 from widgets import StatusPill, StatBadge, ToolButton, HDivider, VDivider
+from console_window import ConsoleWindow
 
 log = logging.getLogger("pc.mainwindow")
 
@@ -122,6 +123,9 @@ class _NegotiateConnectWorker(QThread):
 
 class MainWindow(QMainWindow):
 
+    # Signal used to safely marshal disconnect callback from network thread → GUI thread
+    _disconnect_signal = pyqtSignal()
+
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
@@ -136,6 +140,14 @@ class MainWindow(QMainWindow):
         self._transfer_panel_visible = False
         self._is_connecting = False          # guard against overlapping attempts
         self._watchdog_suppressed = False    # True while a connect attempt is in flight
+        self._closing = False                # set in closeEvent to suppress late callbacks
+
+        # Wire disconnect signal → slot (always runs on main/GUI thread)
+        self._disconnect_signal.connect(self._on_disconnect_ui)
+
+        # Console window (singleton, lazy-shown)
+        self.console = ConsoleWindow(self, title="DGX Remote — Console")
+        self.console.attach()   # captures all loggers
 
         self._build_ui()
         self._restore_geometry()
@@ -257,6 +269,11 @@ class MainWindow(QMainWindow):
             f"color: {TEXT_DIM}; font-size: 11px; padding-right: 6px;"
         )
         tb.addWidget(self._lbl_host)
+
+        # Console
+        self._btn_console = ToolButton("🖥", "Console / Error Log")
+        self._btn_console.clicked.connect(self._open_console)
+        tb.addWidget(self._btn_console)
 
         # Settings / Manager
         self._btn_menu = ToolButton("⚙", "Manager / Settings")
@@ -398,20 +415,23 @@ class MainWindow(QMainWindow):
         self._btn_connect.style().unpolish(self._btn_connect)
         self._btn_connect.style().polish(self._btn_connect)
         self._status_pill.set_state("error")
-        self._lbl_host.setText(f"Failed – retrying…" if self.config.auto_reconnect else f"Failed: {error}")
-        log.warning(f"Connection failed: {error}")
-        # Watchdog will fire again on next tick and retry automatically
+        if self.config.auto_reconnect:
+            self._lbl_host.setText("Waiting for DGX…")
+            log.debug(f"Reconnect attempt failed (will retry): {error}")
+        else:
+            self._lbl_host.setText(f"Failed: {error}")
+            log.warning(f"Connection failed: {error}")
 
     def _disconnect(self):
         if self.conn:
             self.conn.disconnect()
 
     def _on_disconnect_signal(self):
-        """Called from network thread — schedule UI update on main thread."""
-        from PyQt6.QtCore import QMetaObject
-        QMetaObject.invokeMethod(self, "_on_disconnect_ui",
-                                  Qt.ConnectionType.QueuedConnection)
+        """Called from network thread — emit signal so GUI thread picks it up."""
+        if not self._closing:
+            self._disconnect_signal.emit()
 
+    @pyqtSlot()
     def _on_disconnect_ui(self):
         self._is_connecting       = False
         self._watchdog_suppressed = False
@@ -563,6 +583,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_transfer_panel"):
             self._transfer_panel.enqueue_paths(paths)
 
+    def _open_console(self):
+        if self.console.isVisible():
+            self.console.hide()
+        else:
+            self.console.show()
+            self.console.raise_()
+
     def _open_manager(self):
         from manager_window import ManagerWindow
         dlg = ManagerWindow(self.config, self)
@@ -590,7 +617,8 @@ class MainWindow(QMainWindow):
         self.resize(max(800, c.win_w), max(500, c.win_h))
 
     def closeEvent(self, event):
-        # Stop watchdog before closing so it doesn't fire during shutdown
+        # Stop watchdog and suppress any late callbacks before teardown
+        self._closing = True
         self._watchdog.stop()
         self._is_connecting = False
         geo = self.geometry()
@@ -600,7 +628,10 @@ class MainWindow(QMainWindow):
         self.config.win_h = geo.height()
         self.config.save()
         if self.conn:
-            self.conn.disconnect()
+            try:
+                self.conn.disconnect()
+            except Exception:
+                pass
         super().closeEvent(event)
 
 

@@ -15,9 +15,10 @@ import time
 
 # ── logging setup ─────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s  %(levelname)-7s  %(name)s  %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("dgx_service")
 

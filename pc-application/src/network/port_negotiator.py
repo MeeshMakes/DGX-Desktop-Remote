@@ -75,7 +75,7 @@ def negotiate_ports(
     try:
         sock = socket.create_connection((dgx_ip, DISCOVERY_PORT), timeout=timeout)
     except OSError as e:
-        log.error("Cannot reach DGX discovery port %d: %s", DISCOVERY_PORT, e)
+        log.debug("Cannot reach DGX discovery port %d: %s", DISCOVERY_PORT, e)
         return None
 
     try:
@@ -106,10 +106,10 @@ def negotiate_ports(
                      result["rpc"], result["video"], result["input"])
             return result
         else:
-            log.error("DGX rejected negotiation: %s", resp.get("error"))
+            log.debug("DGX rejected negotiation: %s", resp.get("error"))
             return None
     except Exception as e:
-        log.error("Negotiation error: %s", e)
+        log.debug("Negotiation error: %s", e)
         return None
     finally:
         sock.close()

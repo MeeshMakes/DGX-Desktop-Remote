@@ -7,6 +7,7 @@ Shows connection status, FPS, control buttons.
 import sys
 import threading
 import os
+import logging
 
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QWidget,
@@ -16,6 +17,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui  import QIcon, QPixmap, QPainter, QColor, QBrush
+
+from console_window import ConsoleWindow
 
 # ──────────────────────────────────────────────────────────────────────
 # Stylesheet (lighter variant for DGX Ubuntu desktop readability)
@@ -57,6 +60,11 @@ class ManagerWindow(QDialog):
         self.setWindowTitle("DGX Desktop Remote — Service Manager")
         self.setMinimumWidth(400)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+
+        # Console window — captures all logs, auto-opens on errors
+        self.console = ConsoleWindow(self, title="DGX Service — Console")
+        self.console.attach()   # hook into root logger
+
         self._build_ui()
 
         self._timer = QTimer()
@@ -128,9 +136,20 @@ class ManagerWindow(QDialog):
         self._btn_stop.clicked.connect(self._stop_service)
         btn_hide = QPushButton("Minimize to Tray")
         btn_hide.clicked.connect(self.hide)
+        btn_console = QPushButton("🖥  Console")
+        btn_console.setToolTip("Show live log / error console")
+        btn_console.clicked.connect(self._toggle_console)
+        btn_row.addWidget(btn_console)
         btn_row.addWidget(btn_hide)
         btn_row.addWidget(self._btn_stop)
         l.addLayout(btn_row)
+
+    def _toggle_console(self):
+        if self.console.isVisible():
+            self.console.hide()
+        else:
+            self.console.show()
+            self.console.raise_()
 
     def _ports_str(self) -> str:
         if not self._svc:

@@ -5,11 +5,19 @@ Entry point for DGX Desktop Remote PC application.
 
 import sys
 import os
+import logging
 
 # Ensure src is on the path (handles both direct run and packaged)
 _SRC = os.path.dirname(os.path.abspath(__file__))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
+
+# Root logger — DEBUG level so the console window catches everything
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(name)-22s  %(levelname)-8s  %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore    import Qt, QSettings
