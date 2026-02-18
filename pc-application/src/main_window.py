@@ -11,18 +11,17 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QToolBar, QStatusBar, QLabel, QPushButton,
-    QSizePolicy, QSplitter, QApplication, QMessageBox
+    QLabel, QPushButton,
+    QSizePolicy, QApplication, QMessageBox, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, pyqtSlot, QMutex
-from PyQt6.QtGui import QIcon, QKeyEvent, QFont, QAction
+from PyQt6.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QKeyEvent
 
 from config import Config
-from theme import ACCENT, SUCCESS, ERROR, WARNING, TEXT_DIM, BG_DEEP, BG_RAISED, BORDER
+from theme import ACCENT, SUCCESS, ERROR, WARNING, TEXT_DIM, BG_DEEP, BG_RAISED, BORDER, TEXT_MAIN, BG_BASE
 from display.video_canvas import VideoCanvas
 from display.coordinate_mapper import CoordinateMapper
 from network.connection import DGXConnection
-from widgets import StatusPill, StatBadge, ToolButton, HDivider, VDivider
 from console_window import ConsoleWindow
 
 log = logging.getLogger("pc.mainwindow")
@@ -174,17 +173,27 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 500)
         self.setStyleSheet(f"background-color: {BG_DEEP};")
 
-        # ── Central layout ───────────────────────────────────────────
-        central = QWidget()
-        self.setCentralWidget(central)
-        self._central_layout = QHBoxLayout(central)
+        # ── Root layout (header on top, video+sidebar below) ─────────
+        root = QWidget()
+        self.setCentralWidget(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ── Thin header bar ──────────────────────────────────────────
+        self._build_header(root_layout)
+
+        # ── Content row (canvas + optional sidebar) ──────────────────
+        content = QWidget()
+        self._central_layout = QHBoxLayout(content)
         self._central_layout.setContentsMargins(0, 0, 0, 0)
         self._central_layout.setSpacing(0)
+        root_layout.addWidget(content, 1)
 
         # ── Video canvas ─────────────────────────────────────────────
         self.canvas = VideoCanvas(self)
         self.canvas.files_dropped.connect(self._on_files_dropped)
-        self._central_layout.addWidget(self.canvas)
+        self._central_layout.addWidget(self.canvas, 1)
 
         # ── Transfer sidebar (hidden by default) ─────────────────────
         self._sidebar_container = QWidget()
@@ -194,124 +203,126 @@ class MainWindow(QMainWindow):
         )
         self._sidebar_container.setVisible(False)
         self._central_layout.addWidget(self._sidebar_container)
-        # Sidebar content is loaded lazily to avoid circular imports
         self._sidebar_built = False
 
-        # ── Toolbar ──────────────────────────────────────────────────
-        self._build_toolbar()
-
-        # ── Status bar ───────────────────────────────────────────────
-        self._build_statusbar()
-
-        # ── Overlay info (FPS / Ping counters over canvas) ───────────
+        # ── Overlay info (FPS / Ping) over canvas ────────────────────
         self._build_canvas_overlay()
 
-        # ── FPS / Ping update timer ───────────────────────────────────
+        # ── Stats update timer ────────────────────────────────────────
         self._stats_timer = QTimer(self)
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start(500)
 
-    def _build_toolbar(self):
-        tb = QToolBar("Main")
-        tb.setMovable(False)
-        tb.setIconSize(QSize(16, 16))
-        tb.setStyleSheet(
-            f"QToolBar {{ background: {BG_RAISED}; border-bottom: 1px solid {BORDER};"
-            f"spacing: 4px; padding: 4px 8px; }}"
-        )
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
+    # ------------------------------------------------------------------
+    # Header bar
+    # ------------------------------------------------------------------
 
-        # App identifier
-        brand = QLabel("  DGX Remote")
+    def _build_header(self, parent_layout: QVBoxLayout):
+        """One-line ~28px header: brand | connect | pin fullscreen files | → status info | console settings"""
+        bar = QWidget()
+        bar.setFixedHeight(28)
+        bar.setStyleSheet(
+            f"background: {BG_RAISED}; border-bottom: 1px solid {BORDER};"
+        )
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(8, 0, 6, 0)
+        h.setSpacing(0)
+
+        # Brand
+        brand = QLabel("DGX Remote")
         brand.setStyleSheet(
-            f"font-weight: 700; font-size: 13px; color: {ACCENT};"
-            f"letter-spacing: 1px; padding-right: 8px;"
+            f"color: {ACCENT}; font-weight: 700; font-size: 12px;"
+            f"letter-spacing: 0.5px; padding-right: 4px; background: transparent;"
         )
-        tb.addWidget(brand)
+        h.addWidget(brand)
 
-        tb.addSeparator()
+        h.addWidget(_vsep())
 
-        # Connect button
-        self._btn_connect = QPushButton("  Connect")
-        self._btn_connect.setProperty("class", "primary")
-        self._btn_connect.setFixedWidth(110)
-        self._btn_connect.setFixedHeight(28)
+        # Connect toggle
+        self._btn_connect = _hbtn("Connect", checkable=False)
         self._btn_connect.clicked.connect(self._toggle_connection)
-        tb.addWidget(self._btn_connect)
+        h.addWidget(self._btn_connect)
 
-        tb.addSeparator()
+        h.addWidget(_vsep())
 
-        # Pin (Always on Top)
-        self._btn_pin = ToolButton("📌", "Pin window (Always on Top)", checkable=True)
+        # Pin (always on top)
+        self._btn_pin = _hbtn("📌", checkable=True, tooltip="Always on top")
         self._btn_pin.setChecked(self.config.pinned)
         self._btn_pin.clicked.connect(self._toggle_pin)
-        tb.addWidget(self._btn_pin)
+        h.addWidget(self._btn_pin)
 
         # Fullscreen
-        self._btn_fullscreen = ToolButton("⛶", "Toggle fullscreen  (F11)", checkable=True)
+        self._btn_fullscreen = _hbtn("⛶", checkable=True, tooltip="Fullscreen  F11")
         self._btn_fullscreen.clicked.connect(self._toggle_fullscreen)
-        tb.addWidget(self._btn_fullscreen)
-
-        tb.addSeparator()
+        h.addWidget(self._btn_fullscreen)
 
         # File transfer sidebar
-        self._btn_files = ToolButton("📁", "File transfer sidebar", checkable=True)
+        self._btn_files = _hbtn("Files", checkable=True, tooltip="File transfer sidebar")
         self._btn_files.clicked.connect(self._toggle_sidebar)
-        tb.addWidget(self._btn_files)
+        h.addWidget(self._btn_files)
 
         # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         spacer.setStyleSheet("background: transparent;")
-        tb.addWidget(spacer)
+        h.addWidget(spacer)
 
-        # DGX host info label
+        # Status pill (text: ● Connected / ○ Disconnected)
+        self._lbl_status = QLabel("○ Disconnected")
+        self._lbl_status.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 6px; background: transparent;"
+        )
+        h.addWidget(self._lbl_status)
+
+        h.addWidget(_vsep())
+
+        # FPS
+        self._lbl_fps = QLabel("—")
+        self._lbl_fps.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 3px; background: transparent;"
+        )
+        self._lbl_fps.setToolTip("Frames per second")
+        h.addWidget(self._lbl_fps)
+
+        # Ping
+        self._lbl_ping = QLabel("")
+        self._lbl_ping.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 3px; background: transparent;"
+        )
+        self._lbl_ping.setToolTip("Round-trip latency")
+        h.addWidget(self._lbl_ping)
+
+        h.addWidget(_vsep())
+
+        # Host / resolution
         self._lbl_host = QLabel("")
         self._lbl_host.setStyleSheet(
-            f"color: {TEXT_DIM}; font-size: 11px; padding-right: 6px;"
+            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 4px; background: transparent;"
         )
-        tb.addWidget(self._lbl_host)
+        h.addWidget(self._lbl_host)
 
-        # Console
-        self._btn_console = ToolButton("🖥", "Console / Error Log")
-        self._btn_console.clicked.connect(self._open_console)
-        tb.addWidget(self._btn_console)
+        h.addWidget(_vsep())
 
-        # Settings / Manager
-        self._btn_menu = ToolButton("⚙", "Manager / Settings")
-        self._btn_menu.clicked.connect(self._open_manager)
-        tb.addWidget(self._btn_menu)
-
-    def _build_statusbar(self):
-        sb = QStatusBar()
-        sb.setFixedHeight(26)
-        self.setStatusBar(sb)
-
-        self._status_pill = StatusPill()
-        sb.addWidget(self._status_pill)
-
-        sb.addWidget(_sep())
-
-        self._badge_fps  = StatBadge("FPS")
-        self._badge_ping = StatBadge("PING")
-        sb.addWidget(self._badge_fps)
-        sb.addWidget(self._badge_ping)
-
-        sb.addWidget(_sep())
-
-        self._lbl_dgx_res = QLabel("")
-        self._lbl_dgx_res.setStyleSheet(
-            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 6px;"
-        )
-        sb.addWidget(self._lbl_dgx_res)
-
-        # Right side — bytes received
-        sb.addPermanentWidget(_sep())
+        # Bytes received
         self._lbl_bytes = QLabel("")
         self._lbl_bytes.setStyleSheet(
-            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 8px;"
+            f"color: {TEXT_DIM}; font-size: 11px; padding: 0 4px; background: transparent;"
         )
-        sb.addPermanentWidget(self._lbl_bytes)
+        h.addWidget(self._lbl_bytes)
+
+        h.addWidget(_vsep())
+
+        # Console
+        self._btn_console = _hbtn("🖥", tooltip="Console / logs")
+        self._btn_console.clicked.connect(self._open_console)
+        h.addWidget(self._btn_console)
+
+        # Settings
+        self._btn_menu = _hbtn("⚙", tooltip="Settings / Manager")
+        self._btn_menu.clicked.connect(self._open_manager)
+        h.addWidget(self._btn_menu)
+
+        parent_layout.addWidget(bar)
 
     def _build_canvas_overlay(self):
         """
@@ -351,9 +362,9 @@ class MainWindow(QMainWindow):
 
         self._is_connecting        = True
         self._watchdog_suppressed  = True
-        self._btn_connect.setText("  Connecting…")
+        self._btn_connect.setText("Connecting…")
         self._btn_connect.setEnabled(False)
-        self._status_pill.set_state("connecting")
+        self._set_status("connecting")
 
         self.conn = DGXConnection(
             on_frame       = self.canvas.update_frame,
@@ -369,8 +380,8 @@ class MainWindow(QMainWindow):
         self._negotiate_worker.start()
 
     def _on_connect_progress(self, msg: str):
-        """Show live negotiation/connect status in the status bar."""
-        self._status_pill.set_state("connecting")
+        """Show live negotiation/connect status in the header."""
+        self._set_status("connecting")
         self._lbl_host.setText(msg)
 
     def _on_connect_success(self, info: dict):
@@ -391,16 +402,12 @@ class MainWindow(QMainWindow):
         self._watchdog_interval   = max(3, self.config.reconnect_interval)
         self._watchdog.setInterval(self._watchdog_interval * 1000)
 
-        self._btn_connect.setText("  Disconnect")
+        self._btn_connect.setText("Disconnect")
         self._btn_connect.setEnabled(True)
-        self._btn_connect.setProperty("class", "danger")
-        self._btn_connect.style().unpolish(self._btn_connect)
-        self._btn_connect.style().polish(self._btn_connect)
 
-        self._status_pill.set_state("connected")
+        self._set_status("connected")
         host = info.get("hostname", "DGX")
-        self._lbl_host.setText(f"{host}  •  {w}×{h} @ {hz}Hz")
-        self._lbl_dgx_res.setText(f"{w}×{h}")
+        self._lbl_host.setText(f"{host}  {w}×{h}@{hz}Hz")
         self._overlay.setVisible(self.config.show_fps)
 
         # Notify tray
@@ -416,19 +423,15 @@ class MainWindow(QMainWindow):
     def _on_connect_failure(self, error: str):
         self._is_connecting       = False
         self._watchdog_suppressed = False
-        self._btn_connect.setText("  Connect")
+        self._btn_connect.setText("Connect")
         self._btn_connect.setEnabled(True)
-        self._btn_connect.setProperty("class", "primary")
-        self._btn_connect.style().unpolish(self._btn_connect)
-        self._btn_connect.style().polish(self._btn_connect)
-        self._status_pill.set_state("error")
+        self._set_status("error")
         if self.config.auto_reconnect:
-            # Exponential backoff: double the interval on each failure, cap at 60 s
             self._watchdog_fail_count += 1
             base = max(3, self.config.reconnect_interval)
             self._watchdog_interval = min(60, base * (2 ** min(self._watchdog_fail_count - 1, 4)))
             self._watchdog.setInterval(self._watchdog_interval * 1000)
-            self._lbl_host.setText(f"Waiting for DGX… (retry in {self._watchdog_interval}s)")
+            self._lbl_host.setText(f"Retry in {self._watchdog_interval}s")
             log.debug("Reconnect attempt failed (retry in %ds): %s",
                       self._watchdog_interval, error)
         else:
@@ -452,23 +455,36 @@ class MainWindow(QMainWindow):
         self.canvas.mapper     = None
         self.canvas.clear_frame()
         self.mapper = None
-        self._btn_connect.setText("  Connect")
+        self._btn_connect.setText("Connect")
         self._btn_connect.setEnabled(True)
-        self._btn_connect.setProperty("class", "primary")
-        self._btn_connect.style().unpolish(self._btn_connect)
-        self._btn_connect.style().polish(self._btn_connect)
         reconnecting = self.config.auto_reconnect and bool(self.config.dgx_ip)
-        self._status_pill.set_state("connecting" if reconnecting else "disconnected")
+        self._set_status("connecting" if reconnecting else "disconnected")
         self._lbl_host.setText("Waiting for DGX…" if reconnecting else "")
-        self._lbl_dgx_res.setText("")
+        self._lbl_fps.setText("—")
+        self._lbl_ping.setText("")
+        self._lbl_bytes.setText("")
         self._overlay.setVisible(False)
-        self._badge_fps.set_value("—")
-        self._badge_ping.set_value("—")
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(False)
         log.info("Disconnected from DGX")
-        # Watchdog will pick up and retry on next tick
+
+    # ------------------------------------------------------------------
+    # Status label helper
+    # ------------------------------------------------------------------
+
+    def _set_status(self, state: str):
+        _STATES = {
+            "connected":    (f"● Connected",    SUCCESS),
+            "connecting":   (f"◌ Connecting…",  WARNING),
+            "disconnected": (f"○ Disconnected",  TEXT_DIM),
+            "error":        (f"✕ Error",         ERROR),
+        }
+        text, color = _STATES.get(state, ("○ Disconnected", TEXT_DIM))
+        self._lbl_status.setText(text)
+        self._lbl_status.setStyleSheet(
+            f"color: {color}; font-size: 11px; padding: 0 6px; background: transparent;"
+        )
 
     # ------------------------------------------------------------------
     # Watchdog auto-reconnect
@@ -477,7 +493,7 @@ class MainWindow(QMainWindow):
     def _watchdog_tick(self):
         """Called every reconnect_interval seconds; reconnects if needed."""
         if self._watchdog_suppressed or self._is_connecting:
-            return   # connect attempt already in flight
+            return
         connected = bool(self.conn and self.conn.connected)
         if not connected and self.config.auto_reconnect and self.config.dgx_ip:
             log.debug("Watchdog: not connected — attempting reconnect")
@@ -494,21 +510,20 @@ class MainWindow(QMainWindow):
         ping = self.conn.ping_ms
 
         fps_str  = f"{fps:.0f} fps"
-        ping_str = f"{ping:.1f} ms" if ping > 0 else "— ms"
+        ping_str = f"{ping:.1f} ms" if ping > 0 else "—"
 
-        self._badge_fps.set_value(fps_str)
-        self._badge_ping.set_value(ping_str)
+        self._lbl_fps.setText(fps_str)
+        self._lbl_ping.setText(ping_str)
 
         if self.config.show_fps:
             self._ol_fps.setText(f"  {fps_str}  ")
             self._ol_ping.setText(f"  {ping_str}  ")
 
-        # Bytes received
         mb = self.conn.bytes_recv / 1_048_576
         if mb > 1024:
-            self._lbl_bytes.setText(f"⬇  {mb/1024:.2f} GB received")
+            self._lbl_bytes.setText(f"⬇ {mb/1024:.2f} GB")
         elif mb > 0:
-            self._lbl_bytes.setText(f"⬇  {mb:.1f} MB received")
+            self._lbl_bytes.setText(f"⬇ {mb:.1f} MB")
 
     def _on_ping_update(self, ping_ms: float):
         pass   # Handled by _update_stats timer
@@ -698,13 +713,46 @@ def _qt_mods(mods) -> list:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def _sep() -> QWidget:
-    """Thin vertical separator for status bar."""
+def _vsep() -> QWidget:
+    """Thin vertical separator for the header bar."""
     f = QWidget()
     f.setFixedWidth(1)
     f.setFixedHeight(14)
-    f.setStyleSheet(f"background: {BORDER};")
+    f.setStyleSheet(f"background: {BORDER}; margin: 0 4px;")
     return f
+
+
+def _hbtn(text: str, checkable: bool = False, tooltip: str = "") -> QPushButton:
+    """Flat, compact header button — no border, no background, matches bar height."""
+    btn = QPushButton(text)
+    btn.setCheckable(checkable)
+    btn.setFixedHeight(22)
+    btn.setContentsMargins(0, 0, 0, 0)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    btn.setStyleSheet(f"""
+        QPushButton {{
+            background: transparent;
+            color: {TEXT_DIM};
+            border: none;
+            border-radius: 3px;
+            font-size: 11px;
+            padding: 0 7px;
+            letter-spacing: 0.3px;
+        }}
+        QPushButton:hover {{
+            background: rgba(255,255,255,0.06);
+            color: {TEXT_MAIN};
+        }}
+        QPushButton:checked {{
+            background: rgba(108,99,255,0.18);
+            color: {ACCENT};
+        }}
+        QPushButton:pressed {{
+            background: rgba(255,255,255,0.04);
+        }}
+    """)
+    return btn
 
 
 def _overlay_lbl(text: str) -> QLabel:
