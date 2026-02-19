@@ -41,6 +41,7 @@ Panel B  (DGX → PC):
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -120,6 +121,15 @@ def _shell_icon(path: str):
         return QFileIconProvider().icon(QFileInfo(path))
     except Exception:
         return None
+
+
+def _delete_local_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -244,9 +254,14 @@ class _ResultsView(QListWidget):
         if self._side == "pc":
             a = menu.addAction("📂  Show in Explorer")
             a.triggered.connect(self._show_in_explorer)
+            menu.addSeparator()
+            a_del = menu.addAction("🗑  Delete selected from disk")
+            a_del.triggered.connect(self._delete_selected_local)
         else:
             a = menu.addAction("📂  Open Folder on DGX")
             a.triggered.connect(self._open_dgx_folders_selection)
+            a_del = menu.addAction("🗑  Delete selected on DGX")
+            a_del.triggered.connect(self._delete_selected_dgx)
 
         menu.addSeparator()
         a2 = menu.addAction("📋  Copy path")
@@ -300,6 +315,35 @@ class _ResultsView(QListWidget):
             if 0 <= idx < len(self._data):
                 self._data.pop(idx)
             self.takeItem(self.row(lw))
+
+    def _delete_selected_local(self) -> None:
+        for lw in list(self.selectedItems()):
+            item: _DeliveredItem = lw.data(Qt.ItemDataRole.UserRole)
+            target = Path(item.local_path or item.dest)
+            try:
+                _delete_local_path(target)
+            except Exception as exc:
+                log.warning("delete local path failed (%s): %s", target, exc)
+        self._remove_selected()
+
+    def _delete_selected_dgx(self) -> None:
+        conn = self._conn_getter() if self._conn_getter else None
+        if not conn:
+            return
+        for lw in list(self.selectedItems()):
+            item: _DeliveredItem = lw.data(Qt.ItemDataRole.UserRole)
+            target = item.dest
+            if not target:
+                continue
+            try:
+                res = conn.rpc({"type": "delete_path", "path": target}, timeout=8)
+                if res.get("ok"):
+                    idx = self.row(lw)
+                    if 0 <= idx < len(self._data):
+                        self._data.pop(idx)
+                    self.takeItem(self.row(lw))
+            except Exception as exc:
+                log.warning("delete path on DGX failed (%s): %s", target, exc)
 
     # ── Drag out  (Panel B only) ──────────────────────────────────────
 
@@ -590,13 +634,14 @@ class _SendToPCPane(QWidget):
             log.debug("open received folder: %s", exc)
 
     def delete_files(self) -> None:
-        """Delete all received local files from disk, then clear the list."""
-        for item in list(self._view._data):
-            if item.local_path:
-                try:
-                    Path(item.local_path).unlink(missing_ok=True)
-                except Exception as exc:
-                    log.warning("delete received file: %s", exc)
+        """Delete ALL content in local <repo>/received/, then clear the list."""
+        received = Path(__file__).parents[3] / "received"
+        received.mkdir(exist_ok=True)
+        for child in received.iterdir():
+            try:
+                _delete_local_path(child)
+            except Exception as exc:
+                log.warning("delete received entry failed (%s): %s", child, exc)
         self.clear_all()
 
     def clear_all(self) -> None:

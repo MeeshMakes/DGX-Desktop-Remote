@@ -334,6 +334,45 @@ class RPCHandler:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
+    def handle_delete_path(self, msg: dict) -> dict:
+        """Delete a file/folder path on DGX within allowed transfer roots."""
+        path = msg.get("path", "").strip()
+        if not path:
+            return {"ok": False, "error": "Missing 'path' field"}
+
+        if "/__received__" in path:
+            resolved = REPO_ROOT / "received"
+        elif path == "~":
+            resolved = HOME_DIR
+        elif path.startswith("~/"):
+            resolved = HOME_DIR / path[2:]
+        else:
+            resolved = Path(path)
+
+        try:
+            target = resolved.resolve()
+        except Exception as exc:
+            return {"ok": False, "error": f"Bad path: {exc}"}
+
+        allowed_roots = [
+            (REPO_ROOT / "received").resolve(),
+            BRIDGE_STAGING.resolve(),
+            SHARED_DRIVE.resolve(),
+        ]
+        if not any(root == target or root in target.parents for root in allowed_roots):
+            return {"ok": False, "error": "Path outside allowed roots"}
+        if not target.exists():
+            return {"ok": False, "error": "Path not found"}
+
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+            return {"ok": True, "path": str(target)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     # ------------------------------------------------------------------
     # Input (dispatched from input channel, but RPC versions useful too)
     # ------------------------------------------------------------------
