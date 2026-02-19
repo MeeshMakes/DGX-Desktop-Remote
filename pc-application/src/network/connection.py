@@ -398,14 +398,15 @@ class DGXConnection:
     def _download_pushed_file(self, msg: dict) -> None:
         """
         Called in a background thread when the DGX pushes a file_available
-        notification.  Downloads from DGX SharedDrive to PC ~/Downloads/.
+        notification.  Downloads from DGX SharedDrive to <repo>/received/.
         """
         filename = msg.get("filename", "")
         if not filename:
             return
         from pathlib import Path as _P
         import os as _os
-        downloads = _P.home() / "Downloads"
+        # Save into <repo>/received/ rather than ~/Downloads/
+        downloads = _P(__file__).parents[3] / "received"
         downloads.mkdir(exist_ok=True)
         # Avoid overwriting — add a numeric suffix if needed
         dest = downloads / filename

@@ -209,10 +209,15 @@ class _DropZone(QWidget):
         btn_shared.setToolTip("Open ~/SharedDrive/ on DGX")
         btn_shared.clicked.connect(lambda: subprocess.Popen(
             ["xdg-open", str(SHARED_DRIVE)]))
-        btn_clear = QPushButton("Clear")
+        btn_delete = QPushButton("\U0001f5d1  Delete Files")
+        btn_delete.setToolTip("Delete all staged files from SharedDrive and clear the list")
+        btn_delete.clicked.connect(self._delete_files)
+        btn_clear = QPushButton("Clear List")
+        btn_clear.setToolTip("Remove from list only (files remain on disk)")
         btn_clear.clicked.connect(self._clear)
         btn_row.addWidget(btn_shared)
         btn_row.addStretch()
+        btn_row.addWidget(btn_delete)
         btn_row.addWidget(btn_clear)
         root.addLayout(btn_row)
 
@@ -288,6 +293,18 @@ class _DropZone(QWidget):
         self._list.setVisible(False)
         self._hint.setVisible(True)
 
+    def _delete_files(self) -> None:
+        """Delete each staged file from disk then clear the list."""
+        _log = logging.getLogger("dgx.manager")
+        for i in range(self._list.count()):
+            path = self._list.item(i).data(Qt.ItemDataRole.UserRole)
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception as exc:
+                    _log.warning("Delete file failed: %s", exc)
+        self._clear()
+
 
 class _IncomingPane(QWidget):
     """
@@ -315,9 +332,13 @@ class _IncomingPane(QWidget):
         btn_open = QPushButton("📂 Open Folder")
         btn_open.setToolTip("Open ~/BridgeStaging/ and ~/Desktop/PC-Transfer/inbox/")
         btn_open.clicked.connect(self._open_folders)
+        btn_delete_sel = QPushButton("\U0001f5d1  Delete Selected")
+        btn_delete_sel.setToolTip("Delete selected incoming files from disk")
+        btn_delete_sel.clicked.connect(self._delete_selected)
         btn_row.addWidget(btn_refresh)
         btn_row.addStretch()
         btn_row.addWidget(btn_open)
+        btn_row.addWidget(btn_delete_sel)
         root.addLayout(btn_row)
 
         self._refresh()
@@ -357,10 +378,22 @@ class _IncomingPane(QWidget):
             except Exception:
                 pass
 
+    def _delete_selected(self) -> None:
+        """Delete selected incoming files from disk and refresh the list."""
+        _log = logging.getLogger("dgx.manager")
+        for item in self._list.selectedItems():
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception as exc:
+                    _log.warning("Delete incoming file failed: %s", exc)
+        self._refresh()
 
-class _TransferDrawer(QWidget):
+
+class _TransferDrawer(QDialog):
     """
-    Slide-out transfer drawer embedded in the ManagerWindow.
+    Standalone popup window for file transfers.
 
     Top pane:    Send to PC    (DGX → PC)
     Bottom pane: Incoming from PC  (PC → DGX)
@@ -369,19 +402,19 @@ class _TransferDrawer(QWidget):
     def __init__(self, svc, parent=None):
         super().__init__(parent)
         self._svc = svc
+        self.setWindowTitle("Transfers — DGX ↔ PC")
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
+        self.setMinimumSize(480, 540)
         self._build()
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 8, 0, 0)
+        root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
-
-        # ── Divider ───────────────────────────────────────────────────
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet(f"background: {_BORDER};")
-        line.setFixedHeight(1)
-        root.addWidget(line)
 
         # ── Send to PC ────────────────────────────────────────────────
         grp_send = QGroupBox("↑  Send to PC  (DGX → PC)")
@@ -517,10 +550,8 @@ class ManagerWindow(QDialog):
         btn_row.addWidget(self._btn_stop)
         l.addLayout(btn_row)
 
-        # Transfer drawer (hidden by default, revealed by 'Transfers' button)
-        self._drawer = _TransferDrawer(self._svc)
-        self._drawer.setVisible(False)
-        l.addWidget(self._drawer)
+        # Transfer drawer (popup window, opened on demand)
+        self._drawer: _TransferDrawer | None = None
 
     def _toggle_console(self):
         if self.console.isVisible():
@@ -530,10 +561,18 @@ class ManagerWindow(QDialog):
             self.console.raise_()
 
     def _toggle_drawer(self, checked: bool) -> None:
-        self._drawer.setVisible(checked)
+        if self._drawer is None:
+            self._drawer = _TransferDrawer(self._svc, parent=None)
+            # Keep toggle-button state in sync when user closes the popup window
+            self._drawer.finished.connect(
+                lambda _: self._btn_transfers.setChecked(False))
         if checked:
             self._drawer.refresh_incoming()
-        self.adjustSize()
+            self._drawer.show()
+            self._drawer.raise_()
+            self._drawer.activateWindow()
+        else:
+            self._drawer.hide()
 
     def _ports_str(self) -> str:
         if not self._svc:

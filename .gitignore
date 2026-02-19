@@ -23,6 +23,10 @@ env/
 Thumbs.db
 desktop.ini
 
+# Received files from DGX (contents are transient)
+received/*
+!received/.gitkeep
+
 # IDE
 .vscode/settings.json
 .idea/

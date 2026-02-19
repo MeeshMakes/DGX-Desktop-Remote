@@ -396,7 +396,6 @@ class _SendToDGXPane(QWidget):
 
         root.addWidget(_panel_header(
             "\u2191", "SEND TO DGX", " \u2014 drop PC files here",
-            btns=[("\U0001f4c2", "Open DGX Desktop folder", self._open_dgx_desktop)],
         ))
 
         self._stack = QStackedWidget()
@@ -421,6 +420,27 @@ class _SendToDGXPane(QWidget):
         self._stack.addWidget(self._view)  # index 1
 
         root.addWidget(self._stack, 1)
+
+        # ── Pane A footer ─────────────────────────────────────────────
+        ftr_a = QWidget()
+        ftr_a.setFixedHeight(28)
+        ftr_a.setStyleSheet(f"background: {BG_DEEP};")
+        fl_a = QHBoxLayout(ftr_a)
+        fl_a.setContentsMargins(6, 0, 6, 0)
+        fl_a.setSpacing(4)
+        fl_a.addStretch()
+        self._btn_open_dgx = QPushButton("\U0001f4c2  Open DGX Folder")
+        self._btn_open_dgx.setFixedHeight(22)
+        self._btn_open_dgx.setStyleSheet(
+            f"QPushButton {{ background: {BG_SURFACE}; color: {TEXT_DIM};"
+            f"  border: 1px solid {BORDER}; border-radius: 4px;"
+            f"  font-size: 10px; padding: 0 8px; }}"
+            f"QPushButton:hover {{ color: {TEXT_MAIN}; border-color: {ACCENT}66; }}"
+        )
+        self._btn_open_dgx.setToolTip("Open on DGX the destination folder (routed through Tunnel RPC)")
+        self._btn_open_dgx.clicked.connect(self._open_dgx_desktop)
+        fl_a.addWidget(self._btn_open_dgx)
+        root.addWidget(ftr_a)
 
     # ── Public ────────────────────────────────────────────────────────
 
@@ -494,7 +514,6 @@ class _SendToPCPane(QWidget):
 
         root.addWidget(_panel_header(
             "\u2193", "SEND TO PC", " \u2014 from DGX",
-            btns=[("\U0001f4c2", "Open PC Downloads folder", self._open_pc_downloads)],
         ))
 
         self._stack = QStackedWidget()
@@ -521,6 +540,27 @@ class _SendToPCPane(QWidget):
 
         root.addWidget(self._stack, 1)
 
+        # ── Pane B footer ─────────────────────────────────────────────
+        ftr_b = QWidget()
+        ftr_b.setFixedHeight(28)
+        ftr_b.setStyleSheet(f"background: {BG_DEEP};")
+        fl_b = QHBoxLayout(ftr_b)
+        fl_b.setContentsMargins(6, 0, 6, 0)
+        fl_b.setSpacing(4)
+        fl_b.addStretch()
+        self._btn_open_received = QPushButton("\U0001f4c2  Open Received Folder")
+        self._btn_open_received.setFixedHeight(22)
+        self._btn_open_received.setStyleSheet(
+            f"QPushButton {{ background: {BG_SURFACE}; color: {TEXT_DIM};"
+            f"  border: 1px solid {BORDER}; border-radius: 4px;"
+            f"  font-size: 10px; padding: 0 8px; }}"
+            f"QPushButton:hover {{ color: {TEXT_MAIN}; border-color: {ACCENT}66; }}"
+        )
+        self._btn_open_received.setToolTip("Open the local received/ folder where DGX files are saved")
+        self._btn_open_received.clicked.connect(self._open_pc_downloads)
+        fl_b.addWidget(self._btn_open_received)
+        root.addWidget(ftr_b)
+
     # ── Public ────────────────────────────────────────────────────────
 
     def add_received_file(self, name: str, local_path: str) -> None:
@@ -533,14 +573,26 @@ class _SendToPCPane(QWidget):
 
     def _open_pc_downloads(self) -> None:
         import subprocess, sys as _sys
-        downloads = str(Path.home() / "Downloads")
+        received = Path(__file__).parents[3] / "received"
+        received.mkdir(exist_ok=True)
+        folder = str(received)
         try:
             if _sys.platform == "win32":
-                subprocess.Popen(["explorer", downloads])
+                subprocess.Popen(["explorer", folder])
             else:
-                subprocess.Popen(["xdg-open", downloads])
+                subprocess.Popen(["xdg-open", folder])
         except Exception as exc:
-            log.debug("open pc downloads: %s", exc)
+            log.debug("open received folder: %s", exc)
+
+    def delete_files(self) -> None:
+        """Delete all received local files from disk, then clear the list."""
+        for item in list(self._view._data):
+            if item.local_path:
+                try:
+                    Path(item.local_path).unlink(missing_ok=True)
+                except Exception as exc:
+                    log.warning("delete received file: %s", exc)
+        self.clear_all()
 
     def clear_all(self) -> None:
         self._view.clear_results()
@@ -611,16 +663,6 @@ class TransferPanel(QWidget):
         )
         hl.addWidget(self._status_lbl)
 
-        btn_close = QPushButton("×")
-        btn_close.setFlat(True)
-        btn_close.setFixedSize(28, 28)
-        btn_close.setStyleSheet(
-            f"QPushButton {{ color: {TEXT_DIM}; font-size: 14px; background: transparent;"
-            f"  border: none; border-radius: 4px; }}"
-            f"QPushButton:hover {{ color: {TEXT_MAIN}; background: {BG_SURFACE}; }}"
-        )
-        btn_close.clicked.connect(self.hide)
-        hl.addWidget(btn_close)
         root.addWidget(hdr)
 
         # ── Global 3 px progress bar ─────────────────────────────────
@@ -685,9 +727,13 @@ class TransferPanel(QWidget):
 
         fl.addStretch()
 
-        btn_clear = _fb("Clear", "Clear both result lists")
+        btn_clear = _fb("Clear List", "Clear both result lists (files stay on disk)")
         btn_clear.clicked.connect(self._clear_all)
         fl.addWidget(btn_clear)
+
+        btn_delete = _fb("\U0001f5d1  Delete Received", "Delete all received files from disk and clear Panel B")
+        btn_delete.clicked.connect(self._delete_received)
+        fl.addWidget(btn_delete)
 
         root.addWidget(ftr)
 
@@ -778,3 +824,8 @@ class TransferPanel(QWidget):
     def _clear_all(self) -> None:
         self._pane_a.clear_all()
         self._pane_b.clear_all()
+
+    def _delete_received(self) -> None:
+        """Delete all files in Panel B from disk, then clear both panes."""
+        self._pane_b.delete_files()
+        self._pane_a.clear_all()
