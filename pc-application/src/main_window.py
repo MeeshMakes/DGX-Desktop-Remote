@@ -693,6 +693,9 @@ class MainWindow(QMainWindow):
         )
         tabs.addTab(self._shared_drive_panel, "📂  Shared")
 
+        # Wire downloads → Transfer Panel B
+        self._shared_drive_panel.set_transfer_panel(self._transfer_panel)
+
         layout.addWidget(tabs)
         self._sidebar_built = True
 

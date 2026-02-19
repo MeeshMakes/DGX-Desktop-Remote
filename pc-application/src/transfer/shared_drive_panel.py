@@ -146,8 +146,15 @@ class SharedDrivePanel(QWidget):
         self._list_thread:     Optional[_ListThread]     = None
         self._upload_thread:   Optional[_UploadThread]   = None
         self._download_thread: Optional[_DownloadThread] = None
+        self._transfer_panel   = None   # wired by MainWindow
+        self._pending_dl_name  = ""     # filename being downloaded
+        self._pending_dl_dest  = ""     # local destination path
         self._build_ui()
         self.setAcceptDrops(True)
+
+    def set_transfer_panel(self, panel) -> None:
+        """Wire a reference to TransferPanel so downloads populate Panel B."""
+        self._transfer_panel = panel
 
     # ------------------------------------------------------------------
     # UI build
@@ -421,6 +428,8 @@ class SharedDrivePanel(QWidget):
         self._progress.setVisible(True)
         self._progress.setValue(0)
         self._status_lbl.setText(f"Downloading {filename}…")
+        self._pending_dl_name = filename
+        self._pending_dl_dest = dest
         self._download_thread = _DownloadThread(self._conn, filename, dest)
         self._download_thread.progress.connect(self._on_download_progress)
         self._download_thread.done.connect(self._on_download_done)
@@ -438,6 +447,12 @@ class SharedDrivePanel(QWidget):
         self._set_controls_enabled(True)
         if result.get("ok"):
             self._status_lbl.setText("Download complete ✓")
+            # Populate Transfer Panel B with the delivered file
+            if self._transfer_panel is not None and self._pending_dl_dest:
+                self._transfer_panel.add_received_file(
+                    self._pending_dl_name or Path(self._pending_dl_dest).name,
+                    self._pending_dl_dest,
+                )
         else:
             err = result.get("error", "Unknown error")
             self._status_lbl.setText(f"Download failed: {err}")

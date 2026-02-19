@@ -43,6 +43,7 @@ class TransferWorker(QThread):
     # ── Signals ───────────────────────────────────────────────────────
     item_progress    = pyqtSignal(str, int, int)   # id, bytes_done, bytes_total
     item_status      = pyqtSignal(str, str, str)   # id, status, message
+    item_sent        = pyqtSignal(str, str, str)   # id, dgx_name, dgx_final_path
     job_progress     = pyqtSignal(int, int)         # items_done, items_total
     job_complete     = pyqtSignal(str, int, int)    # job_id, ok_count, fail_count
     # Fired once all items are sitting in DGX BridgeStaging (ready to drag)
@@ -50,7 +51,7 @@ class TransferWorker(QThread):
 
     def __init__(self, job: TransferJob, connection,
                  session: TransferSession,
-                 auto_place: bool = False,
+                 auto_place: bool = True,
                  parent=None):
         super().__init__(parent)
         self._job        = job
@@ -203,6 +204,13 @@ class TransferWorker(QThread):
             item.status       = "done"
             self._session.log_entry(entry)
             self.item_status.emit(item.item_id, "done", "")
+            # Notify panel A: file placed successfully on DGX
+            self.item_sent.emit(item.item_id, dgx_name, item.dgx_dest)
+            # Clean up the local bridge-prep working copy
+            try:
+                prep_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
         else:
             # Bridge mode: file is in DGX staging — user drags to destination
@@ -212,6 +220,9 @@ class TransferWorker(QThread):
             self._session.log_entry(entry)
             self.item_status.emit(item.item_id, "bridge",
                                   f"In DGX bridge — {dgx_name}")
+            # Notify panel A with the staging path
+            dgx_stage_path = f"{self._session.dgx_stage_path}/{dgx_name}"
+            self.item_sent.emit(item.item_id, dgx_name, dgx_stage_path)
 
     def _fail(self, item: TransferItem, entry: LogEntry, msg: str):
         item.status       = "failed"

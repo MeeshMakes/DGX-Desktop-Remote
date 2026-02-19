@@ -293,6 +293,17 @@ class RPCHandler:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
+    def handle_open_path(self, msg: dict) -> dict:
+        """Open an arbitrary path on the DGX in the file manager / default app."""
+        path = msg.get("path", "").strip()
+        if not path:
+            return {"ok": False, "error": "Missing 'path' field"}
+        try:
+            subprocess.Popen(["xdg-open", path])  # noqa: S603
+            return {"ok": True, "path": path}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
     # ------------------------------------------------------------------
     # Input (dispatched from input channel, but RPC versions useful too)
     # ------------------------------------------------------------------
