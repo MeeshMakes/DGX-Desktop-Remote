@@ -6,6 +6,7 @@ toolbar, status bar, FPS/ping overlays, and wires up all subsystems.
 
 import sys
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -406,6 +407,10 @@ class MainWindow(QMainWindow):
         self._set_status("connected")
         host = info.get("hostname", "DGX")
         self._lbl_host.setText(f"{host}  {w}×{h}@{hz}Hz")
+        self._rate_last_t = time.monotonic()
+        self._rate_last_b = self.conn.bytes_recv if self.conn else 0
+        self._rate_mbps   = 0.0
+        self._lbl_bytes.setText("⬇ 0.0 MB/s")
         # Notify transfer panel of new connection
         if hasattr(self, "_transfer_panel"):
             self._transfer_panel.set_connection(self.conn)
@@ -465,6 +470,9 @@ class MainWindow(QMainWindow):
         self._lbl_fps.setText("—")
         self._lbl_ping.setText("")
         self._lbl_bytes.setText("")
+        self._rate_last_t = None
+        self._rate_last_b = None
+        self._rate_mbps   = 0.0
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(False)
@@ -554,11 +562,30 @@ class MainWindow(QMainWindow):
             self._dot.setStyleSheet(self._dot_style("#3A8EFF"))
             self._dot.setToolTip("● Connected — idle")
 
-        mb = self.conn.bytes_recv / 1_048_576
-        if mb > 1024:
-            self._lbl_bytes.setText(f"⬇ {mb/1024:.2f} GB")
-        elif mb > 0:
-            self._lbl_bytes.setText(f"⬇ {mb:.1f} MB")
+        now = time.monotonic()
+        last_t = getattr(self, "_rate_last_t", None)
+        last_b = getattr(self, "_rate_last_b", None)
+        if last_t is None or last_b is None:
+            self._rate_last_t = now
+            self._rate_last_b = self.conn.bytes_recv
+            self._rate_mbps = 0.0
+            self._lbl_bytes.setText("⬇ 0.0 MB/s")
+            return
+
+        dt = now - last_t
+        if dt <= 0:
+            return
+        db = max(0, self.conn.bytes_recv - last_b)
+        inst_mbps = (db / dt) / 1_048_576
+        # Smooth small jitter in 500ms timer updates.
+        self._rate_mbps = (0.65 * getattr(self, "_rate_mbps", 0.0)) + (0.35 * inst_mbps)
+        self._rate_last_t = now
+        self._rate_last_b = self.conn.bytes_recv
+
+        if self._rate_mbps >= 1024:
+            self._lbl_bytes.setText(f"⬇ {self._rate_mbps/1024:.2f} GB/s")
+        else:
+            self._lbl_bytes.setText(f"⬇ {self._rate_mbps:.1f} MB/s")
 
     def _on_ping_update(self, ping_ms: float):
         pass   # Handled by _update_stats timer
