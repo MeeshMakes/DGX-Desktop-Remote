@@ -21,7 +21,11 @@ log = logging.getLogger(__name__)
 
 TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
 BRIDGE_STAGING = Path.home() / "BridgeStaging"
+SHARED_DRIVE   = Path.home() / "SharedDrive"
 _VALID_FOLDERS = {"inbox", "outbox", "staging", "archive"}
+
+# Ensure SharedDrive folder exists on service start
+SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
 
 
 def _human_size(n: int) -> str:
@@ -243,6 +247,49 @@ class RPCHandler:
         try:
             subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603
             return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Shared Drive  (~/SharedDrive/ — bidirectional PC ↔ DGX exchange)
+    # ------------------------------------------------------------------
+
+    def handle_list_shared(self, msg: dict) -> dict:
+        """Return all files in ~/SharedDrive/."""
+        SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
+        files = []
+        for f in sorted(SHARED_DRIVE.iterdir()):
+            if f.is_file():
+                sz   = f.stat().st_size
+                mtime= f.stat().st_mtime
+                files.append({
+                    "name":       f.name,
+                    "size":       sz,
+                    "size_human": _human_size(sz),
+                    "mtime":      mtime,
+                })
+        return {"ok": True, "files": files, "path": str(SHARED_DRIVE)}
+
+    def handle_delete_shared(self, msg: dict) -> dict:
+        """Delete a file from ~/SharedDrive/."""
+        filename = msg.get("filename", "")
+        if not filename:
+            return {"ok": False, "error": "Missing filename"}
+        target = SHARED_DRIVE / Path(filename).name   # prevent path traversal
+        if not target.exists():
+            return {"ok": False, "error": "File not found"}
+        try:
+            target.unlink()
+            return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def handle_open_shared_drive(self, msg: dict) -> dict:
+        """Open ~/SharedDrive/ in the DGX file manager."""
+        SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.Popen(["xdg-open", str(SHARED_DRIVE)])  # noqa: S603
+            return {"ok": True, "path": str(SHARED_DRIVE)}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 

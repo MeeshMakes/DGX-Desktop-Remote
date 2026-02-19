@@ -41,9 +41,11 @@ def _is_port_free(port: int) -> bool:
 # ─── file transfer root ───────────────────────────────────────────────
 TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
 BRIDGE_STAGING = Path.home() / "BridgeStaging"
+SHARED_DRIVE   = Path.home() / "SharedDrive"
 for _d in ("inbox", "outbox", "staging", "archive"):
     (TRANSFER_ROOT / _d).mkdir(parents=True, exist_ok=True)
 BRIDGE_STAGING.mkdir(parents=True, exist_ok=True)
+SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
 
 CHUNK = 65536
 
@@ -315,6 +317,8 @@ class ClientSession:
             # folder = "BridgeStaging/<session_id>"
             session_id = folder.split("/", 1)[1]
             dest_dir = BRIDGE_STAGING / session_id
+        elif folder == "SharedDrive":
+            dest_dir = SHARED_DRIVE
         elif folder in ("inbox", "outbox", "staging", "archive"):
             dest_dir = TRANSFER_ROOT / folder
         else:
@@ -356,7 +360,11 @@ class ClientSession:
         filename = msg.get("filename", "")
         if not filename:
             return {"ok": False, "error": "No filename"}
-        src = TRANSFER_ROOT / folder / Path(filename).name
+        # Resolve source directory — SharedDrive or legacy TRANSFER_ROOT
+        if folder == "SharedDrive":
+            src = SHARED_DRIVE / Path(filename).name
+        else:
+            src = TRANSFER_ROOT / folder / Path(filename).name
         if not src.exists():
             return {"ok": False, "error": "File not found"}
 

@@ -406,6 +406,8 @@ class MainWindow(QMainWindow):
         # Notify transfer panel of new connection
         if hasattr(self, "_transfer_panel"):
             self._transfer_panel.set_connection(self.conn)
+        if hasattr(self, "_shared_drive_panel"):
+            self._shared_drive_panel.set_connection(self.conn)
         # Notify tray
         if hasattr(self, "tray"):
             self.tray.set_connected(True, self.config.dgx_ip)
@@ -466,6 +468,8 @@ class MainWindow(QMainWindow):
         # Detach transfer panel from stale connection
         if hasattr(self, "_transfer_panel"):
             self._transfer_panel.set_connection(None)
+        if hasattr(self, "_shared_drive_panel"):
+            self._shared_drive_panel.set_connection(None)
         log.info("Disconnected from DGX")
 
     # ------------------------------------------------------------------
@@ -661,16 +665,35 @@ class MainWindow(QMainWindow):
         self._sidebar_container.setVisible(visible)
 
     def _build_sidebar_content(self):
-        """Lazily build the file transfer sidebar."""
+        """Lazily build the file transfer sidebar with Send + Shared Drive tabs."""
+        from PyQt6.QtWidgets import QTabWidget
         from transfer.transfer_panel import TransferPanel
+        from transfer.shared_drive_panel import SharedDrivePanel
+
         layout = QVBoxLayout(self._sidebar_container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: none; }}"
+            f"QTabBar::tab {{ padding: 6px 14px; font-size: 11px; }}"
+        )
+
         self._transfer_panel = TransferPanel(
             connection=self.conn,
-            parent=self._sidebar_container
+            parent=tabs
         )
-        layout.addWidget(self._transfer_panel)
+        tabs.addTab(self._transfer_panel, "📤  Send")
+
+        self._shared_drive_panel = SharedDrivePanel(
+            connection=self.conn,
+            parent=tabs
+        )
+        tabs.addTab(self._shared_drive_panel, "📂  Shared")
+
+        layout.addWidget(tabs)
         self._sidebar_built = True
 
     def _on_files_dropped(self, paths: list):

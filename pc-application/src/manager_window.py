@@ -388,11 +388,16 @@ class ManagerWindow(QDialog):
     # ------------------------------------------------------------------
 
     def _fetch_dgx_info(self):
-        t = _SystemInfoThread(self._conn)
-        t.result.connect(self._on_dgx_info)
-        t.start()
+        self._info_thread = _SystemInfoThread(self._conn)   # keep ref — prevents GC crash
+        self._info_thread.result.connect(self._on_dgx_info)
+        self._info_thread.start()
 
     def _on_dgx_info(self, info: dict):
+        try:
+            # Guard: dialog may have been closed before thread finished
+            _ = self._card_hostname
+        except RuntimeError:
+            return
         if not info.get("ok"):
             return
         self._card_hostname.set_value(info.get("hostname", "—"))
