@@ -69,8 +69,8 @@ QPushButton:hover { background: #3d3d5c; }
 QPushButton.primary { background: #6C63FF; border: none; color: #fff; font-weight: 600; }
 QPushButton.danger  { background: #FF4F5E; border: none; color: #fff; font-weight: 600; }
 QLabel          { background: transparent; }
-QGroupBox       { border: 1px solid #3d3d5c; border-radius: 8px; margin-top: 12px; padding: 10px; }
-QGroupBox::title { background: transparent; subcontrol-origin: margin; left: 10px; top: -7px; padding: 0 4px; color: #6C63FF; font-weight: 600; }
+QGroupBox       { border: 1px solid #3d3d5c; border-radius: 8px; margin-top: 16px; padding: 10px; }
+QGroupBox::title { background: transparent; subcontrol-origin: margin; left: 10px; top: 0px; padding: 0 4px; color: #6C63FF; font-weight: 600; }
 QSpinBox        { background: #12121a; border: 1px solid #3d3d5c; border-radius: 5px; padding: 4px 8px; }
 """
 
@@ -385,6 +385,8 @@ class _IncomingPane(QWidget):
                             if p.is_file() else 0, reverse=True)
         for f in files:
             if not f.is_file():
+                continue
+            if f.name.startswith(".") or f.name.lower() == ".gitkeep":
                 continue
             size  = f.stat().st_size
             label = f"{_emoji(f.name)}  {f.name}   ({_human(size)})"

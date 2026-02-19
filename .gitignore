@@ -25,11 +25,9 @@ desktop.ini
 
 # Received files from DGX (contents are transient)
 received/*
-!received/.gitkeep
 
 # Temp bridge staging on DGX (contents are transient)
 staging/*
-!staging/.gitkeep
 
 # IDE
 .vscode/settings.json
