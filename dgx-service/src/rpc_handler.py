@@ -22,8 +22,26 @@ log = logging.getLogger(__name__)
 REPO_ROOT      = Path(__file__).parents[2]          # <repo>/
 TRANSFER_ROOT  = REPO_ROOT / "received"             # <repo>/received/
 BRIDGE_STAGING = REPO_ROOT / "staging"              # <repo>/staging/ (temp)
-SHARED_DRIVE   = Path.home() / "SharedDrive"
 _VALID_FOLDERS = {"inbox", "outbox", "staging", "archive"}
+
+
+def _safe_home_dir() -> Path:
+    try:
+        return Path.home()
+    except Exception:
+        pass
+    home_env = os.environ.get("HOME", "").strip()
+    if home_env:
+        return Path(home_env)
+    try:
+        import pwd
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except Exception:
+        return REPO_ROOT
+
+
+HOME_DIR      = _safe_home_dir()
+SHARED_DRIVE  = HOME_DIR / "SharedDrive"
 
 # Ensure SharedDrive folder exists on service start
 SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
@@ -72,7 +90,7 @@ class RPCHandler:
         """
         w, h = self._svc.resolution_monitor.current
         import shutil, socket as _sock, platform
-        du = shutil.disk_usage(__import__('pathlib').Path.home())
+        du = shutil.disk_usage(HOME_DIR)
         return {
             "ok":           True,
             "type":         "hello_ack",
@@ -88,7 +106,7 @@ class RPCHandler:
 
     def handle_get_system_info(self, msg: dict) -> dict:
         w, h = self._svc.resolution_monitor.current
-        du    = shutil.disk_usage(Path.home())
+        du    = shutil.disk_usage(HOME_DIR)
         disk_free_gb = round(du.free / 1e9, 1)
 
         hostname = socket.gethostname()
@@ -199,7 +217,7 @@ class RPCHandler:
         if "/__received__" in destination:
             dst = REPO_ROOT / "received" / safe_name
         else:
-            dst = Path(destination.replace("~", str(Path.home())))
+            dst = Path(destination.replace("~", str(HOME_DIR)))
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
@@ -299,12 +317,17 @@ class RPCHandler:
 
     def handle_open_path(self, msg: dict) -> dict:
         """Open an arbitrary path on the DGX in the file manager / default app."""
-        from pathlib import Path as _Path
         path = msg.get("path", "").strip()
         if not path:
             return {"ok": False, "error": "Missing 'path' field"}
-        # Expand ~ so xdg-open receives an absolute path
-        resolved = str(_Path(path).expanduser())
+        if "/__received__" in path:
+            resolved = str(REPO_ROOT / "received")
+        elif path == "~":
+            resolved = str(HOME_DIR)
+        elif path.startswith("~/"):
+            resolved = str(HOME_DIR / path[2:])
+        else:
+            resolved = path
         try:
             subprocess.Popen(["xdg-open", resolved])  # noqa: S603
             return {"ok": True, "path": resolved}
