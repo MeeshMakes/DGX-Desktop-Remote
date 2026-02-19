@@ -258,6 +258,73 @@ class RPCHandler:
                 })
         return {"ok": True, "files": files}
 
+    def handle_get_thumbnail(self, msg: dict) -> dict:
+        """
+        Generate a 128×128 PNG thumbnail for an image or video file in staging.
+
+        Request:  {"type": "get_thumbnail", "session_id": "...", "filename": "..."}
+        Response: {"ok": True,  "data": "<base64-png>"}
+             or   {"ok": False, "error": "..."}
+
+        Uses Pillow for images; falls back to opencv-python for videos.
+        Both are typically pre-installed on a DGX node.
+        """
+        import base64
+        import io
+
+        session_id = msg.get("session_id", "")
+        filename   = msg.get("filename", "")
+        if not session_id or not filename:
+            return {"ok": False, "error": "Missing session_id or filename"}
+
+        target = BRIDGE_STAGING / session_id / Path(filename).name
+        if not target.exists():
+            return {"ok": False, "error": f"File not found: {target}"}
+
+        ext = target.suffix.lower()
+        _IMG = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+        _VID = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"}
+
+        # ── Image thumbnail via Pillow ─────────────────────────────
+        if ext in _IMG:
+            try:
+                from PIL import Image
+                img = Image.open(target).convert("RGBA")
+                img.thumbnail((128, 128), Image.LANCZOS)
+                # Flatten alpha onto dark background for JPEG-style output
+                bg = Image.new("RGB", img.size, (30, 30, 30))
+                bg.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
+                buf = io.BytesIO()
+                bg.save(buf, format="PNG", optimize=True)
+                return {"ok": True, "data": base64.b64encode(buf.getvalue()).decode()}
+            except Exception as exc:
+                log.debug("Pillow thumbnail failed for %s: %s", filename, exc)
+                return {"ok": False, "error": str(exc)}
+
+        # ── Video first-frame thumbnail via opencv ─────────────────
+        if ext in _VID:
+            try:
+                import cv2  # type: ignore
+                from PIL import Image
+                cap = cv2.VideoCapture(str(target))
+                ret, frame = cap.read()
+                cap.release()
+                if ret:
+                    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    img.thumbnail((128, 128), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG", optimize=True)
+                    return {
+                        "ok": True,
+                        "data": base64.b64encode(buf.getvalue()).decode(),
+                    }
+                return {"ok": False, "error": "Could not read video frame"}
+            except Exception as exc:
+                log.debug("cv2 thumbnail failed for %s: %s", filename, exc)
+                return {"ok": False, "error": str(exc)}
+
+        return {"ok": False, "error": f"No thumbnail support for {ext}"}
+
     def handle_open_bridge_folder(self, msg: dict) -> dict:
         """Open the bridge staging folder in the DGX file manager (xdg-open)."""
         session_id = msg.get("session_id", "")
