@@ -295,12 +295,15 @@ class RPCHandler:
 
     def handle_open_path(self, msg: dict) -> dict:
         """Open an arbitrary path on the DGX in the file manager / default app."""
+        from pathlib import Path as _Path
         path = msg.get("path", "").strip()
         if not path:
             return {"ok": False, "error": "Missing 'path' field"}
+        # Expand ~ so xdg-open receives an absolute path
+        resolved = str(_Path(path).expanduser())
         try:
-            subprocess.Popen(["xdg-open", path])  # noqa: S603
-            return {"ok": True, "path": path}
+            subprocess.Popen(["xdg-open", resolved])  # noqa: S603
+            return {"ok": True, "path": resolved}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
