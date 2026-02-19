@@ -49,11 +49,20 @@ _XLIB_KEY_MAP: dict[str, str] = {
     "Down":      "Down",
     "space":     "space",
     "Control":   "Control_L",
+    "ctrl":      "Control_L",
     "Alt":       "Alt_L",
+    "alt":       "Alt_L",
     "Shift":     "Shift_L",
+    "shift":     "Shift_L",
     "Super":     "Super_L",
+    "Meta":      "Super_L",
+    "meta":      "Super_L",
     "CapsLock":  "Caps_Lock",
     "NumLock":   "Num_Lock",
+    "Print":     "Print",
+    "Sys_Req":   "Sys_Req",
+    "Pause":     "Pause",
+    "Menu":      "Menu",
     "F1":  "F1",  "F2":  "F2",  "F3":  "F3",  "F4":  "F4",
     "F5":  "F5",  "F6":  "F6",  "F7":  "F7",  "F8":  "F8",
     "F9":  "F9",  "F10": "F10", "F11": "F11", "F12": "F12",
@@ -78,11 +87,20 @@ _XDOTOOL_KEY_MAP: dict[str, str] = {
     "Down":      "Down",
     "space":     "space",
     "Control":   "ctrl",
+    "ctrl":      "ctrl",
     "Alt":       "alt",
+    "alt":       "alt",
     "Shift":     "shift",
+    "shift":     "shift",
     "Super":     "super",
+    "Meta":      "super",
+    "meta":      "super",
     "CapsLock":  "Caps_Lock",
     "NumLock":   "Num_Lock",
+    "Print":     "Print",
+    "Sys_Req":   "Sys_Req",
+    "Pause":     "Pause",
+    "Menu":      "Menu",
     "F1":  "F1",  "F2":  "F2",  "F3":  "F3",  "F4":  "F4",
     "F5":  "F5",  "F6":  "F6",  "F7":  "F7",  "F8":  "F8",
     "F9":  "F9",  "F10": "F10", "F11": "F11", "F12": "F12",
@@ -242,13 +260,61 @@ class InputHandler:
     def mouse_scroll(self, dx: int, dy: int):
         self._backend.mouse_scroll(dx, dy)
 
-    def key_press(self, key: str):
-        self._backend.key_press(key)
+    def key_press(self, key: str, modifiers: list | None = None):
+        key_name = self._normalize_key(key)
+        if not key_name:
+            return
+        mods = self._normalize_modifiers(modifiers or [], exclude=key_name)
+        for m in mods:
+            self._backend.key_press(m)
+        self._backend.key_press(key_name)
 
-    def key_release(self, key: str):
-        self._backend.key_release(key)
+    def key_release(self, key: str, modifiers: list | None = None):
+        key_name = self._normalize_key(key)
+        if not key_name:
+            return
+        mods = self._normalize_modifiers(modifiers or [], exclude=key_name)
+        self._backend.key_release(key_name)
+        for m in reversed(mods):
+            self._backend.key_release(m)
 
     def type_text(self, text: str):
         for ch in text:
             self._backend.key_press(ch)
             self._backend.key_release(ch)
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        if not key:
+            return ""
+        aliases = {
+            "ctrl": "Control",
+            "control": "Control",
+            "shift": "Shift",
+            "alt": "Alt",
+            "meta": "Super",
+            "super": "Super",
+            "printscreen": "Print",
+            "print": "Print",
+            "sysreq": "Sys_Req",
+            "sys_req": "Sys_Req",
+            "esc": "Escape",
+            "pgup": "Page_Up",
+            "pgdn": "Page_Down",
+            "prior": "Page_Up",
+            "next": "Page_Down",
+        }
+        k = str(key)
+        return aliases.get(k.lower(), k)
+
+    def _normalize_modifiers(self, modifiers: list, exclude: str = "") -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        ex = self._normalize_key(exclude)
+        for raw in modifiers:
+            k = self._normalize_key(str(raw))
+            if not k or k == ex or k in seen:
+                continue
+            out.append(k)
+            seen.add(k)
+        return out

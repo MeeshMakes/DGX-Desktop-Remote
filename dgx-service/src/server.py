@@ -293,9 +293,9 @@ class ClientSession:
             elif t == "mouse_scroll":
                 ih.mouse_scroll(msg.get("dx", 0), msg.get("dy", 0))
             elif t == "key_press":
-                ih.key_press(msg.get("key", ""))
+                ih.key_press(msg.get("key", ""), msg.get("modifiers", []))
             elif t == "key_release":
-                ih.key_release(msg.get("key", ""))
+                ih.key_release(msg.get("key", ""), msg.get("modifiers", []))
 
     # ------------------------------------------------------------------
     # File receive (upload PC → DGX)
