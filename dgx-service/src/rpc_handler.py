@@ -19,8 +19,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
-BRIDGE_STAGING = Path.home() / "BridgeStaging"
+REPO_ROOT      = Path(__file__).parents[2]          # <repo>/
+TRANSFER_ROOT  = REPO_ROOT / "received"             # <repo>/received/
+BRIDGE_STAGING = REPO_ROOT / "staging"              # <repo>/staging/ (temp)
 SHARED_DRIVE   = Path.home() / "SharedDrive"
 _VALID_FOLDERS = {"inbox", "outbox", "staging", "archive"}
 
@@ -194,8 +195,11 @@ class RPCHandler:
         if not src.exists():
             return {"ok": False, "error": f"Staged file not found: {src}"}
 
-        # Expand ~ to home directory
-        dst = Path(destination.replace("~", str(Path.home())))
+        # Expand ~ to home directory; resolve __received__ sentinel to repo received dir
+        if "/__received__" in destination:
+            dst = REPO_ROOT / "received" / safe_name
+        else:
+            dst = Path(destination.replace("~", str(Path.home())))
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))

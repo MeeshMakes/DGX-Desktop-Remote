@@ -40,8 +40,8 @@ _BRIDGE_PREP = _REPO_ROOT / "bridge-prep"
 _BRIDGE_PREP.mkdir(parents=True, exist_ok=True)
 
 # ── DGX-side paths ────────────────────────────────────────────────────
-DGX_STAGE_ROOT = "BridgeStaging"   # relative to DGX home (~/)
-DGX_DEFAULT_DEST = "Desktop"        # default drop destination on DGX
+DGX_STAGE_ROOT   = "BridgeStaging"      # staging protocol prefix (do not change)
+DGX_DEFAULT_DEST = "__received__"       # sentinel → <repo>/received/ on DGX
 
 
 # ──────────────────────────────────────────────────────────────────────

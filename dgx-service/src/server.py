@@ -39,11 +39,11 @@ def _is_port_free(port: int) -> bool:
             return False
 
 # ─── file transfer root ───────────────────────────────────────────────
-TRANSFER_ROOT  = Path.home() / "Desktop" / "PC-Transfer"
-BRIDGE_STAGING = Path.home() / "BridgeStaging"
+_REPO_ROOT     = Path(__file__).parents[2]          # <repo>/
+TRANSFER_ROOT  = _REPO_ROOT / "received"            # <repo>/received/
+BRIDGE_STAGING = _REPO_ROOT / "staging"             # <repo>/staging/ (temp)
 SHARED_DRIVE   = Path.home() / "SharedDrive"
-for _d in ("inbox", "outbox", "staging", "archive"):
-    (TRANSFER_ROOT / _d).mkdir(parents=True, exist_ok=True)
+TRANSFER_ROOT.mkdir(parents=True, exist_ok=True)
 BRIDGE_STAGING.mkdir(parents=True, exist_ok=True)
 SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
 

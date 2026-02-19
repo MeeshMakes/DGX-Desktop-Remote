@@ -55,8 +55,9 @@ from PyQt6.QtWidgets import (
 from console_window import ConsoleWindow
 
 SHARED_DRIVE   = Path.home() / "SharedDrive"
-BRIDGE_STAGING = Path.home() / "BridgeStaging"
-PC_TRANSFER    = Path.home() / "Desktop" / "PC-Transfer"
+_REPO_ROOT     = Path(__file__).parents[2]
+BRIDGE_STAGING = _REPO_ROOT / "staging"             # <repo>/staging/ (temp)
+PC_TRANSFER    = _REPO_ROOT / "received"             # <repo>/received/
 
 # ──────────────────────────────────────────────────────────────────────
 # Stylesheet (lighter variant for DGX Ubuntu desktop readability)

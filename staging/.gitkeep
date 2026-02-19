@@ -1,0 +1,3 @@
+# Temporary bridge staging directory used by the DGX service.
+# Files are staged here before being moved to received/.
+# Contents are excluded from git (see .gitignore).
