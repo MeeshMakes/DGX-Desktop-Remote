@@ -236,6 +236,28 @@ class RPCHandler:
             shutil.rmtree(stage_dir, ignore_errors=True)
         return {"ok": True}
 
+    def handle_list_bridge_staging(self, msg: dict) -> dict:
+        """Return a file listing for ~/BridgeStaging/<session_id>/."""
+        session_id = msg.get("session_id", "")
+        if not session_id:
+            return {"ok": False, "error": "Missing session_id"}
+        folder = BRIDGE_STAGING / session_id
+        if not folder.exists():
+            return {"ok": True, "files": []}
+        files = []
+        for f in sorted(folder.iterdir()):
+            if f.is_file():
+                try:
+                    sz = f.stat().st_size
+                except OSError:
+                    sz = 0
+                files.append({
+                    "name":       f.name,
+                    "size":       sz,
+                    "size_human": _human_size(sz),
+                })
+        return {"ok": True, "files": files}
+
     def handle_open_bridge_folder(self, msg: dict) -> dict:
         """Open the bridge staging folder in the DGX file manager (xdg-open)."""
         session_id = msg.get("session_id", "")
