@@ -32,10 +32,15 @@ class DGXConnection:
     """
 
     def __init__(self,
-                 on_frame:      Optional[Callable[[bytes], None]] = None,
-                 on_disconnect: Optional[Callable]                = None,
-                 on_ping_update: Optional[Callable[[float], None]] = None,
-                 on_cursor: Optional[Callable[[str], None]] = None):
+                 on_frame:         Optional[Callable[[bytes], None]] = None,
+                 on_disconnect:    Optional[Callable]                = None,
+                 on_ping_update:   Optional[Callable[[float], None]] = None,
+                 on_cursor:        Optional[Callable[[str], None]]   = None,
+                 on_file_received: Optional[Callable[[str, str], None]] = None):
+        """
+        on_file_received(name, local_path) — called after DGX pushes a
+        file_available notification and the auto-download completes.
+        """
         self._rpc_sock:   Optional[socket.socket] = None
         self._video_sock: Optional[socket.socket] = None
         self._input_sock: Optional[socket.socket] = None
@@ -43,10 +48,11 @@ class DGXConnection:
         self._connected   = False
         self._dgx_ip      = ""
 
-        self._on_frame       = on_frame
-        self._on_disconnect  = on_disconnect
-        self._on_ping_update = on_ping_update
-        self._on_cursor      = on_cursor
+        self._on_frame          = on_frame
+        self._on_disconnect     = on_disconnect
+        self._on_ping_update    = on_ping_update
+        self._on_cursor         = on_cursor
+        self._on_file_received  = on_file_received
 
         # Mouse-move coalescing: only the latest position is sent per cycle
         self._mouse_x:    int   = -1
@@ -374,6 +380,13 @@ class DGXConnection:
                         self._on_cursor(msg.get("shape", "arrow"))
                     elif t == "resolution_changed":
                         log.info("DGX resolution changed: %s", msg)
+                    elif t == "file_available":
+                        # DGX Manager pushed a file to SharedDrive — auto-download
+                        threading.Thread(
+                            target=self._download_pushed_file,
+                            args=(msg,),
+                            daemon=True,
+                        ).start()
                     elif t == "pong":
                         pass  # swallow stale pongs
                     else:
@@ -381,6 +394,36 @@ class DGXConnection:
             except Exception as e:
                 log.debug("RPC push loop error: %s", e)
                 break
+
+    def _download_pushed_file(self, msg: dict) -> None:
+        """
+        Called in a background thread when the DGX pushes a file_available
+        notification.  Downloads from DGX SharedDrive to PC ~/Downloads/.
+        """
+        filename = msg.get("filename", "")
+        if not filename:
+            return
+        from pathlib import Path as _P
+        import os as _os
+        downloads = _P.home() / "Downloads"
+        downloads.mkdir(exist_ok=True)
+        # Avoid overwriting — add a numeric suffix if needed
+        dest = downloads / filename
+        stem = _P(filename).stem
+        suffix = _P(filename).suffix
+        n = 1
+        while dest.exists():
+            dest = downloads / f"{stem} ({n}){suffix}"
+            n += 1
+        result = self.get_file(
+            filename=filename,
+            folder="SharedDrive",
+            local_dest=str(dest),
+        )
+        if result.get("ok") and self._on_file_received:
+            self._on_file_received(dest.name, str(dest))
+        elif not result.get("ok"):
+            log.warning("Auto-download of pushed file failed: %s", result)
 
     def _mouse_flush_loop(self):
         """

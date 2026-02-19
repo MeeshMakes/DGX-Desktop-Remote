@@ -413,6 +413,30 @@ class DGXService:
         self._pending_inp: Optional[socket.socket] = None
         self._session_lock = threading.Lock()
 
+    def push_file_to_pc(self, filename: str, size: int) -> bool:
+        """
+        Push a file_available notification to the connected PC.
+        Called by the DGX Manager when a file is dropped onto 'Send to PC'.
+        The PC's _rpc_push_loop will auto-download via get_file from SharedDrive.
+        """
+        with self._session_lock:
+            sess = self._session
+        if not sess or not sess._running:
+            return False
+        msg = (json.dumps({
+            "type":     "file_available",
+            "filename": filename,
+            "size":     size,
+            "folder":   "SharedDrive",
+        }) + "\n").encode()
+        try:
+            with sess._rpc_push_lock:
+                sess._rpc_conn.sendall(msg)
+            return True
+        except Exception as e:
+            log.warning("push_file_to_pc failed: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Public start / stop
     # ------------------------------------------------------------------

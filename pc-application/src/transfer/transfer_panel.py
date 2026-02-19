@@ -318,7 +318,11 @@ class _ResultsView(QListWidget):
 # Panel sub-header helper
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _panel_header(arrow: str, title: str, subtitle: str) -> QWidget:
+def _panel_header(arrow: str, title: str, subtitle: str,
+                  btns: list[tuple[str, str, callable]] | None = None) -> QWidget:
+    """
+    btns = [(icon, tooltip, callback), ...] added on the right side.
+    """
     w = QWidget()
     w.setFixedHeight(26)
     w.setStyleSheet(
@@ -327,7 +331,7 @@ def _panel_header(arrow: str, title: str, subtitle: str) -> QWidget:
         f"border-bottom: 1px solid {BORDER};"
     )
     l = QHBoxLayout(w)
-    l.setContentsMargins(10, 0, 8, 0)
+    l.setContentsMargins(10, 0, 4, 0)
     l.setSpacing(5)
 
     la = QLabel(arrow)
@@ -344,6 +348,20 @@ def _panel_header(arrow: str, title: str, subtitle: str) -> QWidget:
     l.addWidget(ls)
 
     l.addStretch()
+
+    for icon, tip, cb in (btns or []):
+        b = QPushButton(icon)
+        b.setFixedSize(20, 20)
+        b.setFlat(True)
+        b.setToolTip(tip)
+        b.setStyleSheet(
+            f"QPushButton {{ color: {TEXT_DIM}; font-size: 11px; background: transparent;"
+            f"  border: none; border-radius: 3px; }}"
+            f"QPushButton:hover {{ color: {TEXT_MAIN}; background: {BG_SURFACE}; }}"
+        )
+        b.clicked.connect(cb)
+        l.addWidget(b)
+
     return w
 
 
@@ -376,7 +394,10 @@ class _SendToDGXPane(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(_panel_header("↑", "SEND TO DGX", " — drop PC files here"))
+        root.addWidget(_panel_header(
+            "\u2191", "SEND TO DGX", " \u2014 drop PC files here",
+            btns=[("\U0001f4c2", "Open DGX Desktop folder", self._open_dgx_desktop)],
+        ))
 
         self._stack = QStackedWidget()
 
@@ -405,7 +426,18 @@ class _SendToDGXPane(QWidget):
 
     def add_sent_file(self, name: str, dgx_dest: str) -> None:
         self._view.add_result(_DeliveredItem(name=name, dest=dgx_dest))
+        self._last_dgx_dir = str(Path(dgx_dest).parent) if dgx_dest else ""
         self._stack.setCurrentIndex(1)
+
+    def _open_dgx_desktop(self) -> None:
+        folder = getattr(self, "_last_dgx_dir", "") or "~/Desktop"
+        conn = self._conn_getter() if self._conn_getter else None
+        if not conn:
+            return
+        try:
+            conn.rpc({"type": "open_path", "path": folder}, timeout=5)
+        except Exception as exc:
+            log.debug("open_path RPC: %s", exc)
 
     def clear_all(self) -> None:
         self._view.clear_results()
@@ -460,7 +492,10 @@ class _SendToPCPane(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(_panel_header("↓", "SEND TO PC", " — from DGX"))
+        root.addWidget(_panel_header(
+            "\u2193", "SEND TO PC", " \u2014 from DGX",
+            btns=[("\U0001f4c2", "Open PC Downloads folder", self._open_pc_downloads)],
+        ))
 
         self._stack = QStackedWidget()
 
@@ -495,6 +530,17 @@ class _SendToPCPane(QWidget):
             local_path=local_path,
         ))
         self._stack.setCurrentIndex(1)
+
+    def _open_pc_downloads(self) -> None:
+        import subprocess, sys as _sys
+        downloads = str(Path.home() / "Downloads")
+        try:
+            if _sys.platform == "win32":
+                subprocess.Popen(["explorer", downloads])
+            else:
+                subprocess.Popen(["xdg-open", downloads])
+        except Exception as exc:
+            log.debug("open pc downloads: %s", exc)
 
     def clear_all(self) -> None:
         self._view.clear_results()

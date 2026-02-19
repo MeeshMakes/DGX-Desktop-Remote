@@ -123,8 +123,9 @@ class _NegotiateConnectWorker(QThread):
 class MainWindow(QMainWindow):
 
     # Signals to safely marshal callbacks from network threads → GUI thread
-    _disconnect_signal = pyqtSignal()
-    _cursor_signal     = pyqtSignal(str)
+    _disconnect_signal    = pyqtSignal()
+    _cursor_signal        = pyqtSignal(str)
+    _file_received_signal = pyqtSignal(str, str)  # (name, local_path)
 
     def __init__(self, config: Config):
         super().__init__()
@@ -148,6 +149,7 @@ class MainWindow(QMainWindow):
         # Wire disconnect signal → slot (always runs on main/GUI thread)
         self._disconnect_signal.connect(self._on_disconnect_ui)
         self._cursor_signal.connect(self._on_cursor_slot)
+        self._file_received_signal.connect(self._on_file_received_slot)
 
         # Console window (singleton, lazy-shown)
         self.console = ConsoleWindow(self, title="DGX Remote — Console")
@@ -358,10 +360,11 @@ class MainWindow(QMainWindow):
         self._set_status("connecting")
 
         self.conn = DGXConnection(
-            on_frame       = self.canvas.update_frame,
-            on_disconnect  = self._on_disconnect_signal,
-            on_ping_update = self._on_ping_update,
-            on_cursor      = self._on_cursor_shape
+            on_frame         = self.canvas.update_frame,
+            on_disconnect    = self._on_disconnect_signal,
+            on_ping_update   = self._on_ping_update,
+            on_cursor        = self._on_cursor_shape,
+            on_file_received = self._on_dgx_file_received,
         )
 
         # Use negotiate-then-connect worker so ports are always fresh
@@ -564,6 +567,21 @@ class MainWindow(QMainWindow):
         """Called from network thread — marshal to GUI thread."""
         if not self._closing:
             self._cursor_signal.emit(shape)
+
+    def _on_dgx_file_received(self, name: str, local_path: str) -> None:
+        """Called from network thread when DGX pushes a file and it is downloaded."""
+        if not self._closing:
+            self._file_received_signal.emit(name, local_path)
+
+    @pyqtSlot(str, str)
+    def _on_file_received_slot(self, name: str, local_path: str) -> None:
+        """Runs on GUI thread — add to Transfer Panel B and show sidebar."""
+        # Build + show sidebar if not already visible
+        if not self._sidebar_built or not self._sidebar_container.isVisible():
+            self._btn_files.setChecked(True)
+            self._toggle_sidebar(True)
+        if hasattr(self, "_transfer_panel"):
+            self._transfer_panel.add_received_file(name, local_path)
 
     @pyqtSlot(str)
     def _on_cursor_slot(self, shape: str):
