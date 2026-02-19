@@ -237,7 +237,9 @@ class VideoCanvas(QLabel):
 
     def wheelEvent(self, event):
         if self._connected():
-            dy = 1 if event.angleDelta().y() > 0 else -1
+            # Qt: positive delta = wheel up. Our DGX input protocol expects
+            # negative dy for scroll-up and positive dy for scroll-down.
+            dy = -1 if event.angleDelta().y() > 0 else 1
             dx, ddy = self._to_dgx(event.position().x(), event.position().y())
             self.connection.send_mouse_scroll(dy * 3, dx, ddy)
         super().wheelEvent(event)
