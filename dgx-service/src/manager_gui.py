@@ -171,7 +171,7 @@ class _DropZone(QWidget):
     and notifies the PC via svc.push_file_to_pc().
     """
 
-    _item_ready = pyqtSignal(str, str, int, bool)   # name, path, size, pushed
+    _item_ready = pyqtSignal(str, str, int, bool, bool)   # name, path, size, pushed, is_dir
 
     def __init__(self, svc, parent=None):
         super().__init__(parent)
@@ -259,31 +259,59 @@ class _DropZone(QWidget):
         if not src.exists():
             return
         SHARED_DRIVE.mkdir(parents=True, exist_ok=True)
+
+        is_dir = src.is_dir()
         dest = SHARED_DRIVE / src.name
         n = 1
-        while dest.exists():
-            dest = SHARED_DRIVE / f"{src.stem} ({n}){src.suffix}"
+        while dest.exists() or (is_dir and (SHARED_DRIVE / f"{dest.name}.zip").exists()):
+            if is_dir:
+                dest = SHARED_DRIVE / f"{src.name} ({n})"
+            else:
+                dest = SHARED_DRIVE / f"{src.stem} ({n}){src.suffix}"
             n += 1
+
         try:
-            if src.is_dir():
-                shutil.copytree(str(src), str(dest))
+            if is_dir:
+                # Folder push protocol: archive folder into SharedDrive, then PC auto-downloads
+                # and expands it back into a real folder under <repo>/received/.
+                archive_path = Path(shutil.make_archive(
+                    base_name=str(dest),
+                    format="zip",
+                    root_dir=str(src.parent),
+                    base_dir=src.name,
+                ))
+                payload_name = archive_path.name
+                payload_path = archive_path
+                size = archive_path.stat().st_size
             else:
                 shutil.copy2(str(src), str(dest))
+                payload_name = dest.name
+                payload_path = dest
+                size = dest.stat().st_size
         except Exception as exc:
             logging.getLogger("dgx.manager").warning(
                 "Failed to copy %s to SharedDrive: %s", src, exc)
             return
 
-        size   = dest.stat().st_size
-        pushed = self._svc.push_file_to_pc(dest.name, size) if self._svc else False
+        pushed = (
+            self._svc.push_file_to_pc(
+                filename=payload_name,
+                size=size,
+                is_dir=is_dir,
+                root_name=src.name,
+            )
+            if self._svc else False
+        )
         # Signal back to GUI thread
-        self._item_ready.emit(dest.name, str(dest), size, pushed)
+        self._item_ready.emit(src.name, str(payload_path), size, pushed, is_dir)
 
-    def _add_item_safe(self, name: str, path: str, size: int, pushed: bool) -> None:
+    def _add_item_safe(self, name: str, path: str, size: int, pushed: bool, is_dir: bool) -> None:
         status = "→ PC  ✓" if pushed else "staged (no PC connected)"
-        label  = f"{_emoji(name)}  {name}   ({_human(size)})   [{status}]"
+        icon   = "📁" if is_dir else _emoji(name)
+        label  = f"{icon}  {name}   ({_human(size)})   [{status}]"
         item   = QListWidgetItem(label)
         item.setData(Qt.ItemDataRole.UserRole, path)
+        item.setToolTip(path)
         item.setForeground(QColor(_SUCCESS if pushed else _WARNING))
         self._list.addItem(item)
         self._hint.setVisible(False)
@@ -309,8 +337,8 @@ class _DropZone(QWidget):
 
 class _IncomingPane(QWidget):
     """
-    Shows files that arrived from the PC (in ~/BridgeStaging/ and
-    ~/Desktop/PC-Transfer/inbox/).  Items are draggable to the DGX desktop.
+    Shows files that arrived from the PC (in <repo>/staging/ and
+    <repo>/received/). Items are draggable to the DGX desktop.
     """
 
     def __init__(self, parent=None):
@@ -331,7 +359,7 @@ class _IncomingPane(QWidget):
         btn_refresh = QPushButton("↻ Refresh")
         btn_refresh.clicked.connect(self._refresh)
         btn_open = QPushButton("📂 Open Folder")
-        btn_open.setToolTip("Open ~/BridgeStaging/ and ~/Desktop/PC-Transfer/inbox/")
+        btn_open.setToolTip("Open staging and received folders on DGX")
         btn_open.clicked.connect(self._open_folders)
         btn_delete_sel = QPushButton("\U0001f5d1  Delete Selected")
         btn_delete_sel.setToolTip("Delete selected incoming files from disk")
@@ -351,10 +379,9 @@ class _IncomingPane(QWidget):
         if BRIDGE_STAGING.exists():
             files += sorted(BRIDGE_STAGING.rglob("*"), key=lambda p: p.stat().st_mtime
                             if p.is_file() else 0, reverse=True)
-        # PC-Transfer inbox
-        inbox = PC_TRANSFER / "inbox"
-        if inbox.exists():
-            files += sorted(inbox.iterdir(), key=lambda p: p.stat().st_mtime
+        # Final received folder
+        if PC_TRANSFER.exists():
+            files += sorted(PC_TRANSFER.iterdir(), key=lambda p: p.stat().st_mtime
                             if p.is_file() else 0, reverse=True)
         for f in files:
             if not f.is_file():
@@ -372,7 +399,7 @@ class _IncomingPane(QWidget):
             self._list.addItem(placeholder)
 
     def _open_folders(self) -> None:
-        for folder in (BRIDGE_STAGING, PC_TRANSFER / "inbox"):
+        for folder in (BRIDGE_STAGING, PC_TRANSFER):
             folder.mkdir(parents=True, exist_ok=True)
             try:
                 subprocess.Popen(["xdg-open", str(folder)])

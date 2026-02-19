@@ -413,7 +413,13 @@ class DGXService:
         self._pending_inp: Optional[socket.socket] = None
         self._session_lock = threading.Lock()
 
-    def push_file_to_pc(self, filename: str, size: int) -> bool:
+    def push_file_to_pc(
+        self,
+        filename: str,
+        size: int,
+        is_dir: bool = False,
+        root_name: str = "",
+    ) -> bool:
         """
         Push a file_available notification to the connected PC.
         Called by the DGX Manager when a file is dropped onto 'Send to PC'.
@@ -428,6 +434,8 @@ class DGXService:
             "filename": filename,
             "size":     size,
             "folder":   "SharedDrive",
+            "is_dir":   bool(is_dir),
+            "root_name": (root_name or filename),
         }) + "\n").encode()
         try:
             with sess._rpc_push_lock:

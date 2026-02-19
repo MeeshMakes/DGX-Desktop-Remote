@@ -188,7 +188,9 @@ class _ResultsView(QListWidget):
     def add_result(self, item: _DeliveredItem) -> None:
         self._data.append(item)
         dest_dir = Path(item.dest).parent.name if item.dest else ""
-        label = f"{_file_emoji(item.name)}  {item.name}"
+        is_folder = bool(item.local_path and Path(item.local_path).is_dir())
+        emoji = "📁" if is_folder else _file_emoji(item.name)
+        label = f"{emoji}  {item.name}"
         if dest_dir:
             label += f"   →  {dest_dir}"
 
@@ -264,7 +266,10 @@ class _ResultsView(QListWidget):
             try:
                 if sys.platform == "win32":
                     if p.exists():
-                        subprocess.Popen(["explorer", "/select,", str(p)])
+                        if p.is_dir():
+                            subprocess.Popen(["explorer", str(p)])
+                        else:
+                            subprocess.Popen(["explorer", "/select,", str(p)])
                     elif p.parent.exists():
                         subprocess.Popen(["explorer", str(p.parent)])
                 else:
@@ -450,7 +455,7 @@ class _SendToDGXPane(QWidget):
         self._stack.setCurrentIndex(1)
 
     def _open_dgx_desktop(self) -> None:
-        folder = getattr(self, "_last_dgx_dir", "") or "~/Desktop"
+        folder = getattr(self, "_last_dgx_dir", "") or "~/__received__"
         conn = self._conn_getter() if self._conn_getter else None
         if not conn:
             return

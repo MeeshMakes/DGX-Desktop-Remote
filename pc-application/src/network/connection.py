@@ -10,6 +10,8 @@ import threading
 import hashlib
 import logging
 import time
+import shutil
+import zipfile
 from typing import Optional, Callable
 
 import sys
@@ -401,13 +403,63 @@ class DGXConnection:
         notification.  Downloads from DGX SharedDrive to <repo>/received/.
         """
         filename = msg.get("filename", "")
+        is_dir = bool(msg.get("is_dir", False))
+        root_name = str(msg.get("root_name", "")).strip()
         if not filename:
             return
         from pathlib import Path as _P
-        import os as _os
         # Save into <repo>/received/ rather than ~/Downloads/
         downloads = _P(__file__).parents[3] / "received"
         downloads.mkdir(exist_ok=True)
+
+        if is_dir:
+            archive_dest = downloads / filename
+            archive_stem = _P(filename).stem
+            archive_suffix = _P(filename).suffix or ".zip"
+            n = 1
+            while archive_dest.exists():
+                archive_dest = downloads / f"{archive_stem} ({n}){archive_suffix}"
+                n += 1
+
+            result = self.get_file(
+                filename=filename,
+                folder="SharedDrive",
+                local_dest=str(archive_dest),
+            )
+            if not result.get("ok"):
+                log.warning("Auto-download of pushed folder archive failed: %s", result)
+                return
+
+            folder_base = root_name or archive_stem
+            final_folder = downloads / folder_base
+            n = 1
+            while final_folder.exists():
+                final_folder = downloads / f"{folder_base} ({n})"
+                n += 1
+
+            tmp_extract = downloads / f".extract_{int(time.time() * 1000)}_{threading.get_ident()}"
+            try:
+                tmp_extract.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(archive_dest, "r") as zf:
+                    zf.extractall(tmp_extract)
+
+                top_entries = [p for p in tmp_extract.iterdir()]
+                if len(top_entries) == 1 and top_entries[0].is_dir():
+                    shutil.move(str(top_entries[0]), str(final_folder))
+                else:
+                    final_folder.mkdir(parents=True, exist_ok=True)
+                    for p in top_entries:
+                        shutil.move(str(p), str(final_folder / p.name))
+
+                archive_dest.unlink(missing_ok=True)
+                shutil.rmtree(tmp_extract, ignore_errors=True)
+                if self._on_file_received:
+                    self._on_file_received(final_folder.name, str(final_folder))
+            except Exception as exc:
+                log.warning("Extract pushed folder archive failed: %s", exc)
+                shutil.rmtree(tmp_extract, ignore_errors=True)
+            return
+
         # Avoid overwriting — add a numeric suffix if needed
         dest = downloads / filename
         stem = _P(filename).stem
