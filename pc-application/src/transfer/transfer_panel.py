@@ -49,8 +49,9 @@ from typing import Callable, Optional
 from PyQt6.QtCore import (
     Qt, QMimeData, QUrl, pyqtSignal, pyqtSlot,
 )
+from PyQt6.QtCore import QFileInfo
 from PyQt6.QtGui import (
-    QDrag, QFileInfo,
+    QDrag,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
