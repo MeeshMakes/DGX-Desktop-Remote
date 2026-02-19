@@ -294,8 +294,16 @@ class FileConverter:
         if not info.is_readable:
             return info.path, info.name
 
-        out_dir.mkdir(parents=True, exist_ok=True)
         ext = info.path.suffix.lower()
+
+        # Fast path for non-converted binaries (e.g. .safetensors, checkpoints):
+        # send the original file directly to avoid huge local copy time/disk usage.
+        if ext not in _SCRIPT_CONVERTERS and not (
+            convert_crlf and info.transfer_hint == "text" and info.has_crlf
+        ):
+            return info.path, info.name
+
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         if ext in _SCRIPT_CONVERTERS:
             converter_fn, new_ext = _SCRIPT_CONVERTERS[ext]

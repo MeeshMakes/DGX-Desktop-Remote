@@ -218,7 +218,9 @@ class DGXConnection:
 
         with self._rpc_lock:
             try:
-                self._rpc_sock.settimeout(600.0)
+                # Size-aware timeout: supports multi-GB transfers on slower links.
+                timeout_s = max(600.0, 120.0 + (size / (8 * 1024 * 1024)))
+                self._rpc_sock.settimeout(timeout_s)
                 payload = {
                     "type":            "put_file",
                     "filename":        p.name,
@@ -245,6 +247,7 @@ class DGXConnection:
                 remote_hex = result.get("sha256") or result.get("checksum", "")
                 if remote_hex and remote_hex != hasher.hexdigest():
                     return {"ok": False, "error": "checksum_mismatch"}
+                result["local_sha256"] = hasher.hexdigest()
                 return result
 
             except Exception as e:
@@ -260,6 +263,7 @@ class DGXConnection:
         """Download a file from DGX to local_dest path."""
         with self._rpc_lock:
             try:
+                # Start with a generous header timeout, then scale once size is known.
                 self._rpc_sock.settimeout(600.0)
                 send_json(self._rpc_sock, {
                     "type": "get_file", "filename": filename, "folder": folder
@@ -270,6 +274,8 @@ class DGXConnection:
                     return header
 
                 size   = int(header["size"])
+                timeout_s = max(600.0, 120.0 + (size / (8 * 1024 * 1024)))
+                self._rpc_sock.settimeout(timeout_s)
                 hasher = hashlib.sha256()
                 recv   = 0
 

@@ -50,6 +50,11 @@ _TEXT_EXTENSIONS = {
     ".reg", ".inf", ".nfo",
 }
 
+_BINARY_EXTENSIONS = {
+    ".safetensors", ".ckpt", ".pt", ".pth", ".bin",
+    ".onnx", ".gguf", ".ggml",
+}
+
 
 @dataclass
 class FileInfo:
@@ -78,7 +83,7 @@ def _human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
-def analyze_file(path: Path) -> FileInfo:
+def analyze_file(path: Path, compute_sha256: bool = True) -> FileInfo:
     """
     Detect MIME type, text/binary hint, CRLF presence, and SHA-256.
     Fast for large files: reads header once, then streams for sha256.
@@ -116,7 +121,10 @@ def analyze_file(path: Path) -> FileInfo:
     else:
         # Extension-based text detection
         ext = path.suffix.lower()
-        if ext in _TEXT_EXTENSIONS:
+        if ext in _BINARY_EXTENSIONS:
+            mime = "application/octet-stream"
+            hint = "binary"
+        elif ext in _TEXT_EXTENSIONS:
             mime = "text/plain"
             hint = "text"
         elif size > 0 and _looks_like_text(header):
@@ -134,14 +142,16 @@ def analyze_file(path: Path) -> FileInfo:
             pass
 
     # SHA-256 (stream full file)
-    sha = hashlib.sha256()
-    try:
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                sha.update(chunk)
-        digest = sha.hexdigest()
-    except OSError:
-        digest = ""
+    digest = ""
+    if compute_sha256:
+        sha = hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    sha.update(chunk)
+            digest = sha.hexdigest()
+        except OSError:
+            digest = ""
 
     return FileInfo(
         path=path, name=path.name, size=size,

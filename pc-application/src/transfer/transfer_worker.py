@@ -26,7 +26,7 @@ from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from .transfer_session import (
-    TransferSession, TransferJob, TransferItem, LogEntry, sha256_file
+    TransferSession, TransferJob, TransferItem, LogEntry
 )
 from .file_analyzer  import analyze_file
 from .file_converter import FileConverter
@@ -116,7 +116,7 @@ class TransferWorker(QThread):
 
         # ── 0. Local prep (copy + convert to bridge-prep folder) ──────
         self.item_status.emit(item.item_id, "running", "Preparing…")
-        info = analyze_file(item.local_path)
+        info = analyze_file(item.local_path, compute_sha256=False)
         entry.size_bytes = info.size
         item.bytes_total = info.size
 
@@ -134,24 +134,19 @@ class TransferWorker(QThread):
         converted = converter.needs_conversion(info)
         conv_label = f"→ {dgx_name}" if converted else ""
         self.item_status.emit(item.item_id, "running",
-                              f"Converted {conv_label}".strip() if converted else "Checksumming…")
+                      f"Converted {conv_label}".strip() if converted else "Preparing upload…")
 
         # ── 1. Validate ───────────────────────────────────────────────
         # (already done via analyze_file above)
 
-        # ── 2. SHA-256 source (post-conversion file) ──────────────────
-        sha_src = sha256_file(prep_path)
-        item.sha256_src  = sha_src
-        entry.sha256_src = sha_src
-
-        # ── 3. Send to DGX BridgeStaging ─────────────────────────────
+        # ── 2. Send to DGX BridgeStaging (streaming + checksum) ──────
         entry.ts_started = time.time()
         item.status      = "running"
         self.item_status.emit(item.item_id, "running",
                               f"Sending {info.size_human}…")
 
         # Rebuild metadata with the (possibly new) dgx_name
-        re_info   = analyze_file(prep_path)
+        re_info   = analyze_file(prep_path, compute_sha256=False)
         metadata  = converter.get_remote_metadata(re_info, dgx_name)
 
         dgx_stage_folder = self._session.dgx_stage_path
@@ -167,11 +162,14 @@ class TransferWorker(QThread):
         if not result.get("ok"):
             return self._fail(item, entry, result.get("error", "Send failed"))
 
-        # ── 4. Verify integrity ───────────────────────────────────────
+        # ── 3. Verify integrity ───────────────────────────────────────
         self.item_status.emit(item.item_id, "verifying", "Verifying…")
+        sha_src = result.get("local_sha256", "")
         sha_dst = result.get("sha256", "")
         item.sha256_dst  = sha_dst
         entry.sha256_dst = sha_dst
+        item.sha256_src  = sha_src
+        entry.sha256_src = sha_src
 
         if sha_src and sha_dst:
             ok = sha_src == sha_dst

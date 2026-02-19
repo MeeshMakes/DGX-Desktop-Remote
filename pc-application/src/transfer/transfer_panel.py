@@ -834,7 +834,9 @@ class TransferPanel(QWidget):
         self._workers.append(worker)
         worker.start()
 
+        self._has_progress = False
         self._bar.setVisible(True)
+        self._bar.setRange(0, 0)   # indeterminate while preparing/converting
         self._status_lbl.setText("Processing…")
         log.info("Started job %s: %d item(s) → %s",
                  job.job_id, len(job.items), dgx_dest_dir or "~/Desktop")
@@ -842,6 +844,9 @@ class TransferPanel(QWidget):
     # ── Worker signal handlers ────────────────────────────────────────
 
     def _on_item_progress(self, item_id: str, done: int, total: int) -> None:
+        if not getattr(self, "_has_progress", False):
+            self._has_progress = True
+            self._bar.setRange(0, 1000)
         self._pending[item_id] = (done, total)
         total_b = sum(t for _, t in self._pending.values())
         done_b  = sum(d for d, _ in self._pending.values())
@@ -850,6 +855,8 @@ class TransferPanel(QWidget):
             self._bar.setValue(int(done_b * 1000 / total_b))
 
     def _on_item_status(self, item_id: str, status: str, msg: str) -> None:
+        if msg:
+            self._status_lbl.setText(msg)
         if status in ("done", "bridge", "failed"):
             self._pending.pop(item_id, None)
             self._maybe_hide_bar()
